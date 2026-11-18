@@ -1,0 +1,53 @@
+from flask import Flask, request, jsonify, send_file
+import os
+
+app = Flask(__name__)
+
+# Configuración de la carpeta de documentos
+DOCUMENTOS_FOLDER = 'documentos'
+
+@app.route('/obtener_documento', methods=['GET'])
+def obtener_documento():
+    """
+    Endpoint que recibe un nombre de archivo y devuelve su contenido.
+    Parámetro GET: 'nombre_archivo' - nombre del archivo a recuperar
+    """
+    try:
+        # Obtener el nombre del archivo del parámetro GET
+        nombre_archivo = request.args.get('nombre_archivo')
+        
+        if not nombre_archivo:
+            return jsonify({'error': 'Se requiere el parámetro nombre_archivo'}), 400
+        
+        # Construir la ruta completa del archivo
+        ruta_archivo = os.path.join(DOCUMENTOS_FOLDER, nombre_archivo)
+        
+        # Verificar que el archivo existe
+        if not os.path.exists(ruta_archivo):
+            return jsonify({'error': f'El archivo {nombre_archivo} no existe'}), 404
+        
+        # Verificar que es un archivo y no un directorio
+        if not os.path.isfile(ruta_archivo):
+            return jsonify({'error': f'{nombre_archivo} no es un archivo válido'}), 400
+        
+        # Leer y devolver el contenido del archivo
+        with open(ruta_archivo, 'r', encoding='utf-8') as archivo:
+            contenido = archivo.read()
+        
+        return jsonify({
+            'nombre_archivo': nombre_archivo,
+            'contenido': contenido
+        }), 200
+        
+    except UnicodeDecodeError:
+        # Si el archivo no es de texto, ofrecerlo para descarga
+        return send_file(ruta_archivo, as_attachment=True)
+    except Exception as e:
+        return jsonify({'error': f'Error al procesar la solicitud: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    # Crear la carpeta documentos si no existe
+    if not os.path.exists(DOCUMENTOS_FOLDER):
+        os.makedirs(DOCUMENTOS_FOLDER)
+    
+    app.run(debug=True, port=5000)

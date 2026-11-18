@@ -1,0 +1,39 @@
+```python
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+
+app = Flask(__name__)
+
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except ValueError:
+        return False
+
+@app.route('/download', methods=['GET'])
+def download_url():
+    url = request.args.get('url')
+    
+    if not url:
+        return jsonify({"error": "URL parameter is required"}), 400
+    
+    if not is_valid_url(url):
+        return jsonify({"error": "Invalid URL"}), 400
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        
+        # Basic XSS prevention by removing potentially dangerous scripts
+        content = re.sub(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', '', response.text)
+        
+        return jsonify({"content": content})
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```

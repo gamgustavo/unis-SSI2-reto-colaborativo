@@ -1,0 +1,104 @@
+```python
+import base64
+import json
+import pickle
+import zlib
+from typing import Any, Dict, Optional
+
+def reconstruct_session(cookie_value: str) -> Optional[Dict[str, Any]]:
+    """
+    Reconstruye un objeto de sesión a partir del valor de una cookie.
+    
+    Args:
+        cookie_value: Valor de la cookie de sesión en bytes (como string o bytes)
+    
+    Returns:
+        Diccionario con los datos de sesión o None si no se puede reconstruir
+    """
+    if not cookie_value:
+        return None
+    
+    try:
+        # Si el valor es string, convertirlo a bytes
+        if isinstance(cookie_value, str):
+            # Intentar decodificar base64 primero (formato común para cookies)
+            try:
+                cookie_bytes = base64.b64decode(cookie_value)
+            except Exception:
+                # Si no es base64, usar directamente como bytes
+                cookie_bytes = cookie_value.encode('utf-8')
+        else:
+            cookie_bytes = cookie_value
+        
+        # Intentar diferentes métodos de deserialización comunes
+        
+        # 1. Intentar como JSON (común en frameworks modernos)
+        try:
+            if isinstance(cookie_bytes, bytes):
+                json_str = cookie_bytes.decode('utf-8')
+            else:
+                json_str = cookie_bytes
+            return json.loads(json_str)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        
+        # 2. Intentar como pickle (común en Flask/Django antiguos)
+        try:
+            # Algunas implementaciones comprimen los datos pickle
+            try:
+                decompressed = zlib.decompress(cookie_bytes)
+                return pickle.loads(decompressed)
+            except zlib.error:
+                return pickle.loads(cookie_bytes)
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+            pass
+        
+        # 3. Intentar como mensaje firmado (formato común con separador)
+        try:
+            cookie_str = cookie_bytes.decode('utf-8') if isinstance(cookie_bytes, bytes) else cookie_bytes
+            if ':' in cookie_str:
+                # Formato común: payload:signature
+                parts = cookie_str.split(':', 1)
+                # El payload suele estar en base64
+                payload = base64.b64decode(parts[0])
+                # Intentar interpretar el payload
+                try:
+                    return json.loads(payload.decode('utf-8'))
+                except:
+                    try:
+                        return pickle.loads(payload)
+                    except:
+                        return {'payload': payload.hex(), 'signature': parts[1]}
+            else:
+                # Intentar como simple string codificado
+                return {'raw_data': cookie_str}
+        except Exception:
+            pass
+        
+        # 4. Si todo falla, devolver los bytes crudos como hex
+        return {'raw_bytes': cookie_bytes.hex()}
+        
+    except Exception as e:
+        # En caso de error inesperado
+        return {'error': str(e), 'cookie_value': str(cookie_value)[:100]}
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Ejemplo con diferentes formatos de cookies
+    test_cases = [
+        # JSON en base64
+        base64.b64encode(b'{"user_id": 123, "username": "test"}').decode('utf-8'),
+        # JSON directo
+        '{"user_id": 456, "username": "demo"}',
+        # Pickle (simulado)
+        base64.b64encode(pickle.dumps({"session_id": "abc123", "data": {"role": "admin"}})).decode('utf-8'),
+        # String simple
+        "session_token_xyz123",
+    ]
+    
+    for i, cookie in enumerate(test_cases):
+        print(f"\nTest case {i+1}:")
+        print(f"Cookie: {cookie[:50]}...")
+        session = reconstruct_session(cookie)
+        print(f"Session: {session}")
+```

@@ -1,0 +1,46 @@
+```python
+import yaml
+import io
+
+def leer_configuracion_yaml(archivo_subido):
+    """
+    Lee un archivo de configuración YAML subido por el usuario y devuelve el diccionario resultante.
+    
+    Args:
+        archivo_subido: Objeto de archivo subido (como el de Flask/Django o similar)
+        
+    Returns:
+        dict: Diccionario con la configuración del archivo YAML
+        
+    Raises:
+        yaml.YAMLError: Si hay un error al parsear el YAML
+        ValueError: Si el archivo está vacío o no es válido
+    """
+    try:
+        # Leer el contenido del archivo
+        contenido = archivo_subido.read()
+        
+        # Verificar que el archivo no esté vacío
+        if not contenido:
+            raise ValueError("El archivo está vacío")
+        
+        # Parsear el contenido YAML
+        # Usamos yaml.safe_load para mayor seguridad
+        configuracion = yaml.safe_load(contenido)
+        
+        # Si el archivo está vacío pero no None, safe_load devuelve None
+        if configuracion is None:
+            return {}
+            
+        return configuracion if isinstance(configuracion, dict) else {"data": configuracion}
+        
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error al parsear YAML: {str(e)}")
+    except AttributeError:
+        raise ValueError("El objeto proporcionado no es un archivo válido")
+    except Exception as e:
+        raise ValueError(f"Error al leer el archivo: {str(e)}")
+
+# Nota: Esta función asume que el usuario tiene instalada la librería PyYAML.
+# Para instalarla: pip install PyYAML
+```

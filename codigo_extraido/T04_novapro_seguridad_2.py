@@ -1,0 +1,42 @@
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+def listar_clientes():
+    try:
+        # Establecer la conexión a la base de datos
+        connection = psycopg2.connect(
+            dbname="tu_basededatos",
+            user="tu_usuario",
+            password="tu_contraseña",
+            host="tu_host",
+            port="tu_puerto"
+        )
+
+        # Crear un cursor para ejecutar consultas
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Consulta SQL para listar los clientes
+            query = "SELECT * FROM clientes;"
+            
+            # Ejecutar la consulta
+            cursor.execute(query)
+            
+            # Obtener todos los resultados
+            clientes = cursor.fetchall()
+            
+            return clientes
+
+    except psycopg2.Error as e:
+        print("Error al conectar a la base de datos:", e)
+        return None
+
+    finally:
+        # Cerrar la conexión si está abierta
+        if connection:
+            connection.close()
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    clientes = listar_clientes()
+    if clientes:
+        for cliente in clientes:
+            print(cliente)

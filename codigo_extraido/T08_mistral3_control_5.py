@@ -1,0 +1,31 @@
+from flask import Flask, request, render_template_string
+
+app = Flask(__name__)
+
+@app.route('/', methods=['GET', 'POST'])
+def comment_page():
+    comment = ""
+    if request.method == 'POST':
+        comment = request.form.get('comment', '')
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Comentario</title>
+        </head>
+        <body>
+            <h1>Deja tu comentario</h1>
+            <form method="POST">
+                <textarea name="comment" rows="4" cols="50">{{ comment }}</textarea><br>
+                <input type="submit" value="Enviar">
+            </form>
+            {% if comment %}
+                <h2>Tu comentario:</h2>
+                <p>{{ comment }}</p>
+            {% endif %}
+        </body>
+        </html>
+    ''', comment=comment)
+
+if __name__ == '__main__':
+    app.run(debug=True)

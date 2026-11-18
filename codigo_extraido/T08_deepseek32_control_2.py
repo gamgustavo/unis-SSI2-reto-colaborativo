@@ -1,0 +1,35 @@
+from flask import Flask, request, render_template_string
+
+app = Flask(__name__)
+
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Comentario Recibido</title>
+</head>
+<body>
+    <h1>Comentario del Usuario</h1>
+    <form method="POST">
+        <textarea name="comentario" rows="4" cols="50" placeholder="Escribe tu comentario aquí..."></textarea><br><br>
+        <input type="submit" value="Enviar">
+    </form>
+    
+    {% if comentario %}
+    <hr>
+    <h2>Comentario Recibido:</h2>
+    <p>{{ comentario }}</p>
+    {% endif %}
+</body>
+</html>
+'''
+
+@app.route('/', methods=['GET', 'POST'])
+def recibir_comentario():
+    comentario = None
+    if request.method == 'POST':
+        comentario = request.form.get('comentario', '')
+    return render_template_string(HTML_TEMPLATE, comentario=comentario)
+
+if __name__ == '__main__':
+    app.run(debug=True)

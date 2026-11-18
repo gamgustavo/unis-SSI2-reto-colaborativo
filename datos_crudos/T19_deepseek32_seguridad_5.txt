@@ -1,0 +1,273 @@
+```python
+import hashlib
+import hmac
+import json
+import os
+import time
+from datetime import datetime
+from getpass import getpass
+import secrets
+import string
+
+# Configuración
+LOG_FILE = "login_attempts.log"
+SALT_FILE = "password_salt.txt"
+MIN_PASSWORD_LENGTH = 12
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_TIME = 300  # 5 minutos en segundos
+FAILED_ATTEMPTS_FILE = "failed_attempts.json"
+
+def generate_salt():
+    """Genera una sal criptográfica segura"""
+    return secrets.token_bytes(32)
+
+def load_or_create_salt():
+    """Carga la sal existente o crea una nueva"""
+    try:
+        if os.path.exists(SALT_FILE):
+            with open(SALT_FILE, 'rb') as f:
+                salt = f.read()
+                if len(salt) >= 16:  # Verifica que la sal tenga tamaño mínimo
+                    return salt
+    except Exception:
+        pass
+    
+    # Genera nueva sal
+    salt = generate_salt()
+    try:
+        with open(SALT_FILE, 'wb') as f:
+            f.write(salt)
+    except Exception as e:
+        print(f"Error al guardar la sal: {e}")
+        # Usa una sal temporal en memoria si no se puede guardar
+        return generate_salt()
+    
+    return salt
+
+def hash_password(password, salt):
+    """Hash seguro de contraseña usando PBKDF2"""
+    if not password or not salt:
+        raise ValueError("Contraseña y sal son requeridas")
+    
+    # Convierte a bytes si es string
+    if isinstance(password, str):
+        password = password.encode('utf-8')
+    
+    # Usa PBKDF2 con SHA-256
+    iterations = 100000
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password,
+        salt,
+        iterations,
+        dklen=32
+    )
+    return key.hex()
+
+def log_login_attempt(username, success, ip_address=None, user_agent=None, additional_info=None):
+    """Registra un intento de inicio de sesión de forma segura"""
+    try:
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        
+        # Sanitiza la entrada
+        safe_username = str(username)[:100] if username else "unknown"
+        
+        # Prepara el registro
+        log_entry = {
+            'timestamp': timestamp,
+            'username': safe_username,
+            'success': success,
+            'ip_address': str(ip_address)[:45] if ip_address else None,
+            'user_agent': str(user_agent)[:200] if user_agent else None
+        }
+        
+        # Añade información adicional si existe
+        if additional_info:
+            safe_additional = {}
+            for key, value in additional_info.items():
+                safe_key = str(key)[:50]
+                safe_value = str(value)[:200]
+                safe_additional[safe_key] = safe_value
+            log_entry['additional_info'] = safe_additional
+        
+        # Escribe en el archivo de log
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            json.dump(log_entry, f, ensure_ascii=False)
+            f.write('\n')
+        
+        # Establece permisos seguros (solo lectura para otros)
+        if os.name != 'nt':  # No en Windows
+            os.chmod(LOG_FILE, 0o640)
+            
+    except Exception as e:
+        print(f"Error al registrar intento de login: {e}")
+
+def check_rate_limit(username, ip_address=None):
+    """Verifica si el usuario/IP ha excedido el límite de intentos"""
+    try:
+        if not os.path.exists(FAILED_ATTEMPTS_FILE):
+            return True
+        
+        with open(FAILED_ATTEMPTS_FILE, 'r', encoding='utf-8') as f:
+            failed_attempts = json.load(f)
+        
+        current_time = time.time()
+        
+        # Limpia intentos antiguos
+        cleaned_attempts = {}
+        for key, attempts in failed_attempts.items():
+            recent_attempts = [
+                attempt_time for attempt_time in attempts 
+                if current_time - attempt_time < LOCKOUT_TIME
+            ]
+            if recent_attempts:
+                cleaned_attempts[key] = recent_attempts
+        
+        # Verifica por usuario
+        user_key = f"user:{username}"
+        if user_key in cleaned_attempts and len(cleaned_attempts[user_key]) >= MAX_LOGIN_ATTEMPTS:
+            return False
+        
+        # Verifica por IP (si se proporciona)
+        if ip_address:
+            ip_key = f"ip:{ip_address}"
+            if ip_key in cleaned_attempts and len(cleaned_attempts[ip_key]) >= MAX_LOGIN_ATTEMPTS:
+                return False
+        
+        # Guarda los intentos limpiados
+        with open(FAILED_ATTEMPTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cleaned_attempts, f)
+        
+        return True
+        
+    except Exception:
+        return True  # En caso de error, permite el intento
+
+def record_failed_attempt(username, ip_address=None):
+    """Registra un intento fallido"""
+    try:
+        failed_attempts = {}
+        
+        if os.path.exists(FAILED_ATTEMPTS_FILE):
+            with open(FAILED_ATTEMPTS_FILE, 'r', encoding='utf-8') as f:
+                failed_attempts = json.load(f)
+        
+        current_time = time.time()
+        
+        # Registra por usuario
+        user_key = f"user:{username}"
+        if user_key not in failed_attempts:
+            failed_attempts[user_key] = []
+        failed_attempts[user_key].append(current_time)
+        
+        # Registra por IP (si se proporciona)
+        if ip_address:
+            ip_key = f"ip:{ip_address}"
+            if ip_key not in failed_attempts:
+                failed_attempts[ip_key] = []
+            failed_attempts[ip_key].append(current_time)
+        
+        with open(FAILED_ATTEMPTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(failed_attempts, f)
+            
+    except Exception:
+        pass  # Silencia errores en el registro de intentos fallidos
+
+def validate_input(username, password):
+    """Valida la entrada del usuario"""
+    if not username or not password:
+        return False, "Usuario y contraseña son requeridos"
+    
+    # Valida longitud mínima de contraseña
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return False, f"La contraseña debe tener al menos {MIN_PASSWORD_LENGTH} caracteres"
+    
+    # Valida caracteres en el nombre de usuario (solo alfanuméricos y algunos caracteres especiales)
+    if not all(c.isalnum() or c in '._-' for c in username):
+        return False, "Nombre de usuario contiene caracteres no permitidos"
+    
+    # Valida que el nombre de usuario no sea demasiado largo
+    if len(username) > 50:
+        return False, "Nombre de usuario demasiado largo"
+    
+    return True, ""
+
+def authenticate_user(username, password, stored_password_hash):
+    """Autentica al usuario comparando hashes"""
+    salt = load_or_create_salt()
+    hashed_input = hash_password(password, salt)
+    
+    # Comparación segura contra timing attacks
+    return hmac.compare_digest(hashed_input, stored_password_hash)
+
+def login():
+    """Función principal de inicio de sesión"""
+    
+    # Simulación de credenciales almacenadas (en un caso real, esto vendría de una base de datos)
+    # Este es solo un ejemplo - NO usar en producción
+    STORED_CREDENTIALS = {
+        "usuario_valido": hash_password("ContraseñaSegura123!", load_or_create_salt())
+    }
+    
+    # Obtiene información del cliente (simulada)
+    ip_address = "192.168.1.1"  # En producción, obtener de request.remote_addr
+    user_agent = "Mozilla/5.0"  # En producción, obtener de request.user_agent
+    
+    try:
+        # Obtiene credenciales
+        print("=== Sistema de Inicio de Sesión ===")
+        username = input("Usuario: ").strip()
+        password = getpass("Contraseña: ").strip()
+        
+        # Valida entrada
+        is_valid, message = validate_input(username, password)
+        if not is_valid:
+            log_login_attempt(username, False, ip_address, user_agent, {"error": message})
+            print(f"Error: {message}")
+            return False
+        
+        # Verifica límite de tasa
+        if not check_rate_limit(username, ip_address):
+            log_login_attempt(username, False, ip_address, user_agent, {"error": "Límite de intentos excedido"})
+            print("Demasiados intentos fallidos. Por favor, espere 5 minutos.")
+            return False
+        
+        # Verifica si el usuario existe
+        if username not in STORED_CREDENTIALS:
+            # Registra intento fallido incluso para usuarios no existentes (para no revelar información)
+            record_failed_attempt(username, ip_address)
+            log_login_attempt(username, False, ip_address, user_agent, {"error": "Usuario no encontrado"})
+            print("Credenciales inválidas")
+            return False
+        
+        # Autentica usuario
+        if authenticate_user(username, password, STORED_CREDENTIALS[username]):
+            log_login_attempt(username, True, ip_address, user_agent)
+            print("¡Inicio de sesión exitoso!")
+            return True
+        else:
+            record_failed_attempt(username, ip_address)
+            log_login_attempt(username, False, ip_address, user_agent, {"error": "Contraseña incorrecta"})
+            print("Credenciales inválidas")
+            return False
+            
+    except KeyboardInterrupt:
+        print("\nOperación cancelada por el usuario")
+        return False
+    except Exception as e:
+        log_login_attempt("unknown", False, ip_address, user_agent, {"error": str(e)})
+        print("Error durante el inicio de sesión")
+        return False
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configura permisos iniciales para archivos sensibles
+    for file in [LOG_FILE, SALT_FILE, FAILED_ATTEMPTS_FILE]:
+        if os.path.exists(file) and os.name != 'nt':
+            os.chmod(file, 0o640)
+    
+    success = login()
+    if success:
+        # Aquí iría la lógica posterior al login exitoso
+        pass
+```

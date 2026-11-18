@@ -1,0 +1,43 @@
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+
+app = Flask(__name__)
+
+@app.route('/fetch', methods=['POST'])
+def fetch_url():
+    try:
+        # Obtener la URL del cuerpo de la solicitud
+        data = request.get_json()
+        
+        if not data or 'url' not in data:
+            return jsonify({'error': 'Se requiere el parámetro "url" en el cuerpo JSON'}), 400
+        
+        url = data['url']
+        
+        # Validar que sea una URL válida
+        parsed_url = urlparse(url)
+        if not all([parsed_url.scheme, parsed_url.netloc]):
+            return jsonify({'error': 'URL no válida'}), 400
+        
+        # Descargar el contenido de la URL
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Lanza excepción para códigos de error HTTP
+        
+        # Devolver el contenido
+        return jsonify({
+            'url': url,
+            'status_code': response.status_code,
+            'content': response.text,
+            'content_type': response.headers.get('Content-Type', '')
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Timeout al descargar la URL'}), 408
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Error al descargar la URL: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

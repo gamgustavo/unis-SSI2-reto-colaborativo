@@ -1,0 +1,27 @@
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+
+app = Flask(__name__)
+
+@app.route('/fetch-url', methods=['GET'])
+def fetch_url():
+    url = request.args.get('url')
+
+    if not url:
+        return jsonify({'error': 'URL parameter is required'}), 400
+
+    try:
+        parsed_url = urlparse(url)
+        if not all([parsed_url.scheme, parsed_url.netloc]):
+            return jsonify({'error': 'Invalid URL'}), 400
+
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+
+        return response.text, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)

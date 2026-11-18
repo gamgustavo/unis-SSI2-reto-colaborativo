@@ -1,0 +1,106 @@
+import defusedxml.ElementTree as ET
+from typing import List, Dict, Any
+import io
+
+def extract_xml_items(xml_content: str) -> List[Dict[str, Any]]:
+    """
+    Extrae de forma segura los valores de todos los elementos 'item' de un documento XML.
+    
+    Args:
+        xml_content: Cadena con el contenido XML a procesar
+        
+    Returns:
+        Lista de diccionarios con la información de cada elemento 'item'.
+        Cada diccionario contiene:
+        - 'text': Texto contenido en el elemento (si existe)
+        - 'attributes': Atributos del elemento
+        - 'children': Elementos hijos (si los hay)
+        
+    Raises:
+        ET.ParseError: Si el XML está mal formado
+        ValueError: Si el contenido XML está vacío o es inválido
+    """
+    if not xml_content or not xml_content.strip():
+        raise ValueError("El contenido XML no puede estar vacío")
+    
+    # Limitar el tamaño del XML para prevenir ataques de DoS
+    MAX_XML_SIZE = 10 * 1024 * 1024  # 10 MB
+    if len(xml_content.encode('utf-8')) > MAX_XML_SIZE:
+        raise ValueError(f"El tamaño del XML excede el límite de {MAX_XML_SIZE // (1024*1024)} MB")
+    
+    items = []
+    
+    try:
+        # Usar defusedxml para prevenir ataques XML External Entity (XXE)
+        # y otros ataques relacionados con XML
+        root = ET.fromstring(xml_content)
+        
+        # Buscar todos los elementos 'item' en el documento
+        for item_element in root.iter('item'):
+            item_data = {
+                'text': item_element.text.strip() if item_element.text else None,
+                'attributes': dict(item_element.attrib),
+                'children': []
+            }
+            
+            # Procesar elementos hijos si existen
+            for child in item_element:
+                child_data = {
+                    'tag': child.tag,
+                    'text': child.text.strip() if child.text else None,
+                    'attributes': dict(child.attrib)
+                }
+                item_data['children'].append(child_data)
+            
+            items.append(item_data)
+            
+    except ET.ParseError as e:
+        # Registrar el error sin exponer detalles internos
+        raise ET.ParseError(f"Error al parsear el XML: {str(e)}")
+    except Exception as e:
+        # Capturar cualquier otra excepción de forma genérica
+        raise RuntimeError(f"Error procesando el XML: {str(e)}")
+    
+    return items
+
+
+def safe_extract_items_from_xml(xml_content: str) -> List[str]:
+    """
+    Versión simplificada que extrae solo el texto de los elementos 'item'.
+    
+    Args:
+        xml_content: Cadena con el contenido XML
+        
+    Returns:
+        Lista de cadenas con el texto de cada elemento 'item'
+        
+    Raises:
+        ValueError: Si hay problemas con el XML
+    """
+    try:
+        items_data = extract_xml_items(xml_content)
+        # Extraer solo el texto, filtrando valores None
+        return [item['text'] for item in items_data if item['text'] is not None]
+    except Exception as e:
+        # Relanzar la excepción con un mensaje apropiado
+        raise ValueError(f"No se pudieron extraer items del XML: {str(e)}")
+
+
+# Ejemplo de uso (comentado):
+# if __name__ == "__main__":
+#     xml_example = '''<?xml version="1.0"?>
+#     <catalog>
+#         <item id="1">Producto A</item>
+#         <item id="2">Producto B</item>
+#         <other>No es un item</other>
+#         <item id="3">
+#             <name>Producto C</name>
+#             <price>100</price>
+#         </item>
+#     </catalog>'''
+#     
+#     try:
+#         items = safe_extract_items_from_xml(xml_example)
+#         print("Items encontrados:", items)
+#     except ValueError as e:
+#         print(f"Error: {e}")

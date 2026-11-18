@@ -1,0 +1,175 @@
+import hashlib
+import hmac
+import os
+import re
+import secrets
+import logging
+from datetime import datetime
+from typing import Optional, Tuple
+
+# Configuración segura del logging
+logging.basicConfig(
+    filename='auth.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Configuración de seguridad
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_TIME = 300  # 5 minutos en segundos
+MIN_PASSWORD_LENGTH = 12
+SALT_LENGTH = 32
+PEPPER = os.getenv('AUTH_PEPPER', secrets.token_hex(32))  # Debe ser configurado en el entorno
+
+# Simulación de base de datos de usuarios (en producción, usa una base de datos segura)
+users_db = {
+    'admin': {
+        'password_hash': '',  # Se establecerá en el primer uso
+        'salt': '',
+        'login_attempts': 0,
+        'last_attempt': 0,
+        'locked_until': 0
+    }
+}
+
+def _is_account_locked(username: str) -> bool:
+    """Verifica si la cuenta está bloqueada."""
+    user = users_db.get(username)
+    if not user:
+        return False
+
+    current_time = datetime.now().timestamp()
+    if user['locked_until'] > current_time:
+        return True
+    return False
+
+def _reset_login_attempts(username: str) -> None:
+    """Reinicia los intentos de inicio de sesión."""
+    if username in users_db:
+        users_db[username]['login_attempts'] = 0
+        users_db[username]['locked_until'] = 0
+
+def _increment_login_attempts(username: str) -> None:
+    """Incrementa los intentos de inicio de sesión y bloquea si es necesario."""
+    if username not in users_db:
+        return
+
+    users_db[username]['login_attempts'] += 1
+    users_db[username]['last_attempt'] = datetime.now().timestamp()
+
+    if users_db[username]['login_attempts'] >= MAX_LOGIN_ATTEMPTS:
+        users_db[username]['locked_until'] = datetime.now().timestamp() + LOCKOUT_TIME
+
+def _validate_password_strength(password: str) -> bool:
+    """Valida la fortaleza de la contraseña."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return False
+    if not re.search(r'[A-Z]', password):
+        return False
+    if not re.search(r'[a-z]', password):
+        return False
+    if not re.search(r'[0-9]', password):
+        return False
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        return False
+    return True
+
+def _hash_password(password: str, salt: str) -> str:
+    """Genera un hash seguro de la contraseña usando PBKDF2-HMAC-SHA256."""
+    peppered_password = password + PEPPER
+    return hashlib.pbkdf2_hmac(
+        'sha256',
+        peppered_password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Número de iteraciones
+    ).hex()
+
+def _verify_password(stored_hash: str, provided_password: str, salt: str) -> bool:
+    """Verifica si la contraseña proporcionada coincide con el hash almacenado."""
+    new_hash = _hash_password(provided_password, salt)
+    return hmac.compare_digest(stored_hash, new_hash)
+
+def _log_attempt(username: str, success: bool, ip_address: Optional[str] = None) -> None:
+    """Registra un intento de inicio de sesión en el log."""
+    status = "SUCCESS" if success else "FAILURE"
+    ip_info = f" from IP {ip_address}" if ip_address else ""
+    logging.info(f"Login attempt - User: {username}, Status: {status}{ip_info}")
+
+def _sanitize_input(input_str: str) -> str:
+    """Sanitiza la entrada del usuario para prevenir inyección."""
+    return re.sub(r'[^\w\-@.]', '', input_str) if input_str else ''
+
+def register_user(username: str, password: str) -> Tuple[bool, str]:
+    """Registra un nuevo usuario con contraseña segura."""
+    username = _sanitize_input(username)
+
+    if not username or not password:
+        return False, "Usuario y contraseña son requeridos"
+
+    if username in users_db:
+        return False, "El usuario ya existe"
+
+    if not _validate_password_strength(password):
+        return False, (
+            f"La contraseña debe tener al menos {MIN_PASSWORD_LENGTH} caracteres, "
+            "incluir mayúsculas, minúsculas, números y símbolos"
+        )
+
+    salt = secrets.token_hex(SALT_LENGTH)
+    password_hash = _hash_password(password, salt)
+
+    users_db[username] = {
+        'password_hash': password_hash,
+        'salt': salt,
+        'login_attempts': 0,
+        'last_attempt': 0,
+        'locked_until': 0
+    }
+
+    _log_attempt(username, True)
+    return True, "Usuario registrado exitosamente"
+
+def login(username: str, password: str, ip_address: Optional[str] = None) -> Tuple[bool, str]:
+    """
+    Intento de inicio de sesión seguro con registro de intentos.
+
+    Args:
+        username: Nombre de usuario
+        password: Contraseña proporcionada
+        ip_address: Dirección IP del cliente (opcional, para logging)
+
+    Returns:
+        Tuple[bool, str]: (éxito, mensaje)
+    """
+    username = _sanitize_input(username)
+
+    if not username or not password:
+        _log_attempt(username, False, ip_address)
+        return False, "Usuario y contraseña son requeridos"
+
+    if _is_account_locked(username):
+        remaining_time = int(users_db[username]['locked_until'] - datetime.now().timestamp())
+        _log_attempt(username, False, ip_address)
+        return False, f"Cuenta bloqueada. Intente nuevamente en {remaining_time} segundos"
+
+    if username not in users_db:
+        # Simular tiempo de procesamiento constante para evitar enumeración de usuarios
+        secrets.SystemRandom().randint(100000, 999999)  # Operación dummy
+        _log_attempt(username, False, ip_address)
+        return False, "Usuario o contraseña incorrectos"
+
+    user = users_db[username]
+
+    if not _verify_password(user['password_hash'], password, user['salt']):
+        _increment_login_attempts(username)
+        _log_attempt(username, False, ip_address)
+        return False, "Usuario o contraseña incorrectos"
+
+    _reset_login_attempts(username)
+    _log_attempt(username, True, ip_address)
+    return True, "Inicio de sesión exitoso"
+
+# Ejemplo de uso inicial (en producción, esto debería ser parte de un flujo de registro)
+if 'admin' not in users_db or not users_db['admin']['password_hash']:
+    register_user('admin', secrets.token_urlsafe(16))

@@ -1,0 +1,35 @@
+```python
+import os
+import zipfile
+from flask import Flask, request
+
+app = Flask(__name__)
+
+def extract_zip(file):
+    download_folder = 'descargas'
+    if not os.path.exists(download_folder):
+        os.makedirs(download_folder)
+    
+    with zipfile.ZipFile(file, 'r') as zip_ref:
+        zip_ref.extractall(download_folder)
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return 'No file part', 400
+    file = request.files['file']
+    if file.filename == '':
+        return 'No selected file', 400
+    if file and file.filename.endswith('.zip'):
+        file_path = os.path.join('uploads', file.filename)
+        file.save(file_path)
+        extract_zip(file_path)
+        return 'File extracted successfully', 200
+    else:
+        return 'Invalid file type', 400
+
+if __name__ == '__main__':
+    if not os.path.exists('uploads'):
+        os.makedirs('uploads')
+    app.run(debug=True)
+```

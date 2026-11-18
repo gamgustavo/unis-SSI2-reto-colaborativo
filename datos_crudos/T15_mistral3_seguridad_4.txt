@@ -1,0 +1,64 @@
+```python
+import os
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+def guardar_reporte_temporal(datos: Dict[str, Any], sufijo: Optional[str] = None) -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal seguro y devuelve la ruta.
+
+    Args:
+        datos: Diccionario con los datos del reporte a guardar.
+        sufijo: Sufijo opcional para el nombre del archivo (ej: '.json', '.txt').
+
+    Returns:
+        Ruta absoluta del archivo temporal creado.
+
+    Raises:
+        ValueError: Si los datos están vacíos o no son serializables.
+        IOError: Si ocurre un error al escribir el archivo.
+    """
+    if not datos:
+        raise ValueError("Los datos del reporte no pueden estar vacíos")
+
+    # Validar sufijo para evitar inyección de ruta
+    if sufijo:
+        sufijo = Path(sufijo).suffix  # Normaliza el sufijo
+        if not sufijo or len(sufijo) > 10:  # Limitar longitud del sufijo
+            sufijo = None
+
+    # Crear archivo temporal con medidas de seguridad
+    try:
+        # Usar tempfile con parámetros seguros
+        with tempfile.NamedTemporaryFile(
+            mode='w+',
+            suffix=sufijo or '.tmp',
+            prefix=f'reporte_{uuid.uuid4().hex}_',
+            delete=False,
+            dir=tempfile.gettempdir(),
+            encoding='utf-8'
+        ) as temp_file:
+            # Validar que el archivo se creó en el directorio temporal
+            temp_path = Path(temp_file.name)
+            if not str(temp_path).startswith(tempfile.gettempdir()):
+                raise IOError("Ruta del archivo temporal no es segura")
+
+            # Escribir datos con validación
+            try:
+                temp_file.write(str(datos))  # Convertir a string de forma segura
+            except Exception as e:
+                # Limpiar archivo si falla la escritura
+                temp_file.close()
+                os.unlink(temp_path)
+                raise IOError(f"Error al escribir datos: {str(e)}")
+
+            # Asegurar permisos restrictivos (solo propietario)
+            os.chmod(temp_path, 0o600)
+
+            return str(temp_path.absolute())
+
+    except Exception as e:
+        raise IOError(f"Error al crear archivo temporal: {str(e)}")
+```

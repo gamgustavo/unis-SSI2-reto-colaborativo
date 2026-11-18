@@ -1,0 +1,235 @@
+```python
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+import logging
+from typing import Tuple, Optional
+
+app = Flask(__name__)
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constantes de configuración
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB máximo
+REQUEST_TIMEOUT = 10  # segundos
+ALLOWED_SCHEMES = {'http', 'https'}
+BLOCKED_DOMAINS = {'localhost', '127.0.0.1', '0.0.0.0', '::1', '169.254.169.254'}
+USER_AGENT = 'Mozilla/5.0 (compatible; FlaskURLFetcher/1.0; +security)'
+
+def validate_url(url: str) -> Tuple[bool, Optional[str]]:
+    """
+    Valida una URL para prevenir SSRF y otros ataques.
+    
+    Args:
+        url: URL a validar
+        
+    Returns:
+        Tuple[bool, Optional[str]]: (es_válida, mensaje_error)
+    """
+    if not url:
+        return False, "URL no proporcionada"
+    
+    try:
+        parsed = urlparse(url)
+        
+        # Validar esquema
+        if parsed.scheme not in ALLOWED_SCHEMES:
+            return False, f"Esquema no permitido: {parsed.scheme}"
+        
+        # Validar que tenga host
+        if not parsed.netloc:
+            return False, "URL no tiene host válido"
+        
+        # Extraer dominio (sin puerto)
+        domain = parsed.netloc.split(':')[0].lower()
+        
+        # Bloquear direcciones locales y privadas
+        if domain in BLOCKED_DOMAINS:
+            return False, "Acceso a recursos locales bloqueado"
+        
+        # Bloquear IPs privadas
+        ip_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+        if ip_pattern.match(domain):
+            octets = list(map(int, domain.split('.')))
+            # RFC 1918 - IPs privadas
+            if (octets[0] == 10 or
+                (octets[0] == 172 and 16 <= octets[1] <= 31) or
+                (octets[0] == 192 and octets[1] == 168)):
+                return False, "Acceso a IP privada bloqueado"
+            # Bloquear loopback
+            if octets[0] == 127:
+                return False, "Acceso a loopback bloqueado"
+        
+        # Validar longitud de URL
+        if len(url) > 2048:
+            return False, "URL demasiado larga"
+            
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"Error validando URL {url}: {str(e)}")
+        return False, "URL inválida"
+
+def sanitize_content(content: str) -> str:
+    """
+    Sanitiza el contenido para prevenir XSS en caso de que se muestre en HTML.
+    
+    Args:
+        content: Contenido a sanitizar
+        
+    Returns:
+        str: Contenido sanitizado
+    """
+    # Solo sanitizamos si vamos a mostrar en HTML, pero como devolvemos JSON,
+    # escapamos caracteres especiales para JSON
+    return content
+
+@app.route('/fetch', methods=['POST'])
+def fetch_url():
+    """
+    Endpoint para descargar contenido de una URL.
+    
+    Espera un JSON con la clave 'url'.
+    """
+    # Validar Content-Type
+    if not request.is_json:
+        return jsonify({
+            'error': 'Content-Type debe ser application/json'
+        }), 415
+    
+    # Obtener datos del request
+    data = request.get_json()
+    
+    if not data or 'url' not in data:
+        return jsonify({
+            'error': 'Se requiere el campo "url" en el cuerpo JSON'
+        }), 400
+    
+    url = data['url'].strip()
+    
+    # Validar URL
+    is_valid, error_message = validate_url(url)
+    if not is_valid:
+        return jsonify({
+            'error': f'URL inválida: {error_message}'
+        }), 400
+    
+    try:
+        # Configurar headers para la petición
+        headers = {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'close'  # No mantener conexiones persistentes
+        }
+        
+        # Realizar la petición con límites de seguridad
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            stream=True,  # Stream para controlar el tamaño
+            allow_redirects=False  # Controlar redirecciones manualmente
+        )
+        
+        # Validar código de estado
+        if response.status_code >= 400:
+            return jsonify({
+                'error': f'Error HTTP {response.status_code}',
+                'status_code': response.status_code
+            }), 502
+        
+        # Leer contenido con límite de tamaño
+        content_length = 0
+        chunks = []
+        
+        for chunk in response.iter_content(chunk_size=8192):
+            content_length += len(chunk)
+            
+            if content_length > MAX_CONTENT_LENGTH:
+                response.close()
+                return jsonify({
+                    'error': f'Contenido excede el tamaño máximo de {MAX_CONTENT_LENGTH} bytes'
+                }), 413
+            
+            chunks.append(chunk)
+        
+        # Combinar chunks
+        content = b''.join(chunks)
+        
+        # Decodificar contenido
+        try:
+            # Intentar detectar encoding
+            encoding = response.encoding if response.encoding else 'utf-8'
+            decoded_content = content.decode(encoding, errors='replace')
+        except UnicodeDecodeError:
+            # Si falla, usar utf-8 con reemplazo de errores
+            decoded_content = content.decode('utf-8', errors='replace')
+        
+        # Sanitizar contenido
+        sanitized_content = sanitize_content(decoded_content)
+        
+        # Registrar acceso (sin URL completa por seguridad)
+        logger.info(f"URL descargada exitosamente: {urlparse(url).netloc}")
+        
+        return jsonify({
+            'success': True,
+            'url': url,
+            'content': sanitized_content,
+            'content_length': len(sanitized_content),
+            'status_code': response.status_code,
+            'content_type': response.headers.get('Content-Type', 'unknown')
+        })
+        
+    except requests.exceptions.Timeout:
+        logger.warning(f"Timeout al descargar {url}")
+        return jsonify({
+            'error': 'Timeout al conectar con el servidor remoto'
+        }), 504
+        
+    except requests.exceptions.TooManyRedirects:
+        logger.warning(f"Demasiadas redirecciones en {url}")
+        return jsonify({
+            'error': 'Demasiadas redirecciones'
+        }), 508
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error de conexión para {url}: {str(e)}")
+        return jsonify({
+            'error': f'Error de conexión: {str(e)}'
+        }), 502
+        
+    except Exception as e:
+        logger.error(f"Error inesperado procesando {url}: {str(e)}")
+        return jsonify({
+            'error': 'Error interno del servidor'
+        }), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint no encontrado'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Método no permitido'}), 405
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'Payload demasiado grande'}), 413
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({'error': 'Error interno del servidor'}), 500
+
+if __name__ == '__main__':
+    # Configuración de producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024  # 1MB máximo para requests
+    
+    # Solo para desarrollo - en producción usar gunicorn/uWSGI
+    app.run(host='0.0.0.0', port=5000, debug=False)
+```

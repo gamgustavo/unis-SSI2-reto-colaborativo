@@ -1,0 +1,135 @@
+import os
+import tempfile
+import hashlib
+import json
+import logging
+from typing import Dict, Any, Optional
+from pathlib import Path
+
+# Configurar logging para auditoría
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def guardar_reporte_temporal(datos_reporte: Dict[str, Any], 
+                           nombre_base: Optional[str] = None,
+                           extension: str = ".json") -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal de forma segura.
+    
+    Args:
+        datos_reporte: Diccionario con los datos del reporte
+        nombre_base: Nombre base opcional para el archivo (se sanitizará)
+        extension: Extensión del archivo (por defecto .json)
+    
+    Returns:
+        str: Ruta completa del archivo temporal creado
+    
+    Raises:
+        ValueError: Si los datos del reporte están vacíos o son inválidos
+        OSError: Si hay problemas al crear o escribir el archivo
+    """
+    
+    # Validación de entrada
+    if not datos_reporte:
+        raise ValueError("Los datos del reporte no pueden estar vacíos")
+    
+    if not isinstance(datos_reporte, dict):
+        raise ValueError("Los datos deben ser un diccionario")
+    
+    # Sanitizar nombre base si se proporciona
+    nombre_seguro = None
+    if nombre_base:
+        # Eliminar caracteres peligrosos y limitar longitud
+        nombre_seguro = "".join(c for c in nombre_base if c.isalnum() or c in ('-', '_')).strip()
+        nombre_seguro = nombre_seguro[:50]  # Limitar longitud
+    
+    # Sanitizar extensión
+    extension_segura = "".join(c for c in extension if c.isalnum() or c == '.').strip()
+    if not extension_segura.startswith('.'):
+        extension_segura = '.' + extension_segura
+    
+    try:
+        # Crear directorio temporal seguro con permisos restringidos
+        temp_dir = tempfile.mkdtemp(prefix='reporte_')
+        os.chmod(temp_dir, 0o700)  # Solo el propietario puede leer/escribir
+        
+        # Generar nombre de archivo único
+        if nombre_seguro:
+            nombre_archivo = f"{nombre_seguro}_{hashlib.sha256(str(datos_reporte).encode()).hexdigest()[:8]}{extension_segura}"
+        else:
+            nombre_archivo = f"reporte_{hashlib.sha256(str(datos_reporte).encode()).hexdigest()[:16]}{extension_segura}"
+        
+        ruta_archivo = os.path.join(temp_dir, nombre_archivo)
+        
+        # Validar que la ruta esté dentro del directorio temporal
+        ruta_absoluta = os.path.abspath(ruta_archivo)
+        if not ruta_absoluta.startswith(os.path.abspath(temp_dir)):
+            raise SecurityError("Intento de path traversal detectado")
+        
+        # Serializar datos de forma segura
+        if extension_segura.lower() == '.json':
+            contenido = json.dumps(datos_reporte, ensure_ascii=False, indent=2)
+        else:
+            # Para otras extensiones, convertir a string seguro
+            contenido = str(datos_reporte)
+        
+        # Escribir archivo con permisos restringidos
+        with open(ruta_archivo, 'w', encoding='utf-8') as f:
+            f.write(contenido)
+        
+        os.chmod(ruta_archivo, 0o600)  # Solo el propietario puede leer/escribir
+        
+        # Registrar la operación para auditoría
+        logger.info(f"Reporte guardado en archivo temporal: {ruta_archivo}")
+        logger.info(f"Tamaño del reporte: {len(contenido)} bytes")
+        
+        return ruta_archivo
+        
+    except json.JSONEncodeError as e:
+        logger.error(f"Error al serializar datos JSON: {e}")
+        raise ValueError(f"Datos del reporte no serializables: {e}")
+    except (OSError, IOError) as e:
+        logger.error(f"Error de E/S al guardar reporte: {e}")
+        # Limpiar directorio temporal en caso de error
+        try:
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir)
+        except:
+            pass
+        raise OSError(f"No se pudo guardar el reporte: {e}")
+    except Exception as e:
+        logger.error(f"Error inesperado al guardar reporte: {e}")
+        # Limpiar en caso de cualquier error
+        try:
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir)
+        except:
+            pass
+        raise
+
+class SecurityError(Exception):
+    """Excepción personalizada para errores de seguridad"""
+    pass
+
+# Función auxiliar para limpieza segura (opcional, para usar externamente)
+def limpiar_archivo_temporal(ruta_archivo: str) -> None:
+    """
+    Elimina de forma segura un archivo temporal y su directorio.
+    
+    Args:
+        ruta_archivo: Ruta del archivo a eliminar
+    """
+    try:
+        if os.path.exists(ruta_archivo):
+            # Validar que es un archivo temporal (contiene 'reporte_' en la ruta)
+            if 'reporte_' in ruta_archivo:
+                dir_padre = os.path.dirname(ruta_archivo)
+                os.remove(ruta_archivo)
+                # Eliminar directorio padre si está vacío
+                if os.path.exists(dir_padre) and not os.listdir(dir_padre):
+                    os.rmdir(dir_padre)
+                logger.info(f"Archivo temporal eliminado: {ruta_archivo}")
+    except Exception as e:
+        logger.warning(f"No se pudo eliminar el archivo temporal {ruta_archivo}: {e}")

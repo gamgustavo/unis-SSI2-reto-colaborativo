@@ -1,0 +1,102 @@
+```python
+import os
+from flask import Flask, request, jsonify, send_file, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración
+DOCUMENTS_FOLDER = 'documentos'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'csv', 'json', 'xml', 'html', 'log'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB límite
+
+# Validar extensión del archivo
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/get_file', methods=['GET'])
+def get_file_content():
+    """
+    Endpoint para obtener el contenido de un archivo de la carpeta 'documentos'
+    Parámetro: filename (query string)
+    """
+    # Validar que se proporcionó el parámetro filename
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({'error': 'Parámetro "filename" requerido'}), 400
+    
+    # Sanitizar el nombre del archivo
+    safe_filename = secure_filename(filename)
+    
+    # Validar que el nombre sanitizado no esté vacío
+    if not safe_filename:
+        return jsonify({'error': 'Nombre de archivo inválido'}), 400
+    
+    # Validar extensión permitida
+    if not allowed_file(safe_filename):
+        return jsonify({'error': 'Tipo de archivo no permitido'}), 400
+    
+    # Construir ruta segura
+    file_path = os.path.join(DOCUMENTS_FOLDER, safe_filename)
+    
+    # Prevenir path traversal
+    try:
+        file_path = os.path.abspath(file_path)
+        documents_path = os.path.abspath(DOCUMENTS_FOLDER)
+        
+        # Verificar que el archivo esté dentro de la carpeta documentos
+        if not file_path.startswith(documents_path):
+            return jsonify({'error': 'Acceso no autorizado'}), 403
+    except Exception:
+        return jsonify({'error': 'Error procesando la ruta'}), 400
+    
+    # Verificar que el archivo exista
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'Archivo no encontrado'}), 404
+    
+    # Verificar que sea un archivo (no directorio)
+    if not os.path.isfile(file_path):
+        return jsonify({'error': 'La ruta no es un archivo'}), 400
+    
+    # Verificar tamaño del archivo
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            return jsonify({'error': f'Archivo demasiado grande. Máximo: {MAX_FILE_SIZE} bytes'}), 413
+    except OSError:
+        return jsonify({'error': 'No se puede acceder al archivo'}), 500
+    
+    # Leer y devolver el contenido del archivo
+    try:
+        # Para archivos de texto, leer como texto
+        if safe_filename.rsplit('.', 1)[1].lower() in {'txt', 'md', 'csv', 'json', 'xml', 'html', 'log'}:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                content = file.read()
+            return jsonify({
+                'filename': safe_filename,
+                'content': content,
+                'size': file_size
+            })
+        # Para archivos binarios como PDF, enviar el archivo
+        else:
+            return send_file(
+                file_path,
+                as_attachment=False,
+                download_name=safe_filename,
+                mimetype='application/octet-stream'
+            )
+    except IOError:
+        return jsonify({'error': 'Error al leer el archivo'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    # Crear la carpeta documentos si no existe
+    if not os.path.exists(DOCUMENTS_FOLDER):
+        os.makedirs(DOCUMENTS_FOLDER)
+    
+    # Configuración de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.run(debug=False, host='0.0.0.0', port=5000)
+```

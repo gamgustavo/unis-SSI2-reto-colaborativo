@@ -1,0 +1,70 @@
+```python
+import os
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Tuple
+
+def guardar_reporte_temporal(datos: bytes, sufijo: str = ".tmp") -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal seguro y devuelve su ruta.
+
+    Args:
+        datos: Contenido del reporte en bytes.
+        sufijo: Sufijo opcional para el archivo (ej: ".csv", ".json"). Por defecto ".tmp".
+
+    Returns:
+        Ruta absoluta del archivo temporal creado.
+
+    Raises:
+        ValueError: Si los datos están vacíos o el sufijo contiene caracteres peligrosos.
+        IOError: Si ocurre un error al escribir el archivo.
+    """
+    # Validaciones de seguridad
+    if not datos:
+        raise ValueError("Los datos del reporte no pueden estar vacíos")
+
+    if not sufijo:
+        sufijo = ".tmp"
+
+    # Sanitizar sufijo para evitar directory traversal o inyección de comandos
+    sufijo_limpio = "".join(c for c in sufijo if c.isalnum() or c in (".", "_", "-"))
+    if not sufijo_limpio:
+        sufijo_limpio = ".tmp"
+
+    # Generar nombre seguro con UUID para evitar colisiones y predicción
+    nombre_archivo = f"reporte_{uuid.uuid4().hex}{sufijo_limpio}"
+
+    # Crear directorio temporal seguro con permisos restringidos
+    try:
+        # Usar tempfile.mkstemp para mayor seguridad (evita race conditions)
+        fd, ruta_temp = tempfile.mkstemp(suffix=sufijo_limpio, prefix="reporte_", dir=None)
+        os.close(fd)  # Cerrar el descriptor de archivo (lo abriremos después)
+
+        # Convertir a Path para manejo seguro de rutas
+        ruta_path = Path(ruta_temp)
+
+        # Verificar que el archivo no exista (paranoia adicional)
+        if ruta_path.exists():
+            ruta_path.unlink()
+            raise IOError("El archivo temporal ya existía (colisión improbable)")
+
+        # Escribir datos con permisos restringidos (600)
+        ruta_path.write_bytes(datos)
+        ruta_path.chmod(0o600)
+
+        # Verificar que el archivo se escribió correctamente
+        if not ruta_path.exists() or ruta_path.stat().st_size != len(datos):
+            raise IOError("Error al escribir el archivo temporal")
+
+        return str(ruta_path.absolute())
+
+    except Exception as e:
+        # Limpiar si ocurrió un error
+        if 'ruta_path' in locals() and ruta_path.exists():
+            try:
+                ruta_path.unlink()
+            except:
+                pass
+        raise IOError(f"Error al crear archivo temporal: {str(e)}") from e
+```

@@ -1,0 +1,144 @@
+import re
+import ast
+import operator
+import math
+
+def safe_eval(expr):
+    """
+    Evaluate a mathematical expression safely by parsing it into an AST
+    and evaluating only allowed operations and functions.
+    """
+    allowed_nodes = {
+        ast.Expression, ast.Num, ast.UnaryOp, ast.BinOp, ast.Operator,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow, ast.USub,
+        ast.Name, ast.Load, ast.Call, ast.NameConstant
+    }
+
+    allowed_functions = {
+        'abs': abs,
+        'min': min,
+        'max': max,
+        'round': round,
+        'pow': pow,
+        'sum': sum,
+        'math': {
+            'sin': math.sin,
+            'cos': math.cos,
+            'tan': math.tan,
+            'sqrt': math.sqrt,
+            'log': math.log,
+            'log10': math.log10,
+            'exp': math.exp,
+            'pi': math.pi,
+            'e': math.e
+        }
+    }
+
+    # Remove any whitespace from the expression
+    expr = expr.replace(' ', '')
+
+    # Validate the expression contains only allowed characters
+    if not re.match(r'^[\d+\-*/().,:%^eπ\w]+$', expr):
+        raise ValueError("Invalid characters in expression")
+
+    # Replace alternative symbols for pi and e
+    expr = expr.replace('π', 'math.pi').replace('e', 'math.e')
+
+    # Parse the expression into an AST
+    try:
+        node = ast.parse(expr, mode='eval')
+    except SyntaxError:
+        raise ValueError("Invalid syntax in expression")
+
+    # Validate the AST contains only allowed nodes
+    for n in ast.walk(node):
+        if type(n) not in allowed_nodes:
+            raise ValueError(f"Disallowed operation: {type(n).__name__}")
+
+    # Custom visitor to evaluate the AST with allowed operations
+    class Evaluator(ast.NodeVisitor):
+        def visit_Num(self, node):
+            return node.n
+
+        def visit_UnaryOp(self, node):
+            operand = self.visit(node.operand)
+            if isinstance(node.op, ast.USub):
+                return -operand
+            raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+
+        def visit_BinOp(self, node):
+            left = self.visit(node.left)
+            right = self.visit(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            elif isinstance(node.op, ast.Sub):
+                return left - right
+            elif isinstance(node.op, ast.Mult):
+                return left * right
+            elif isinstance(node.op, ast.Div):
+                return left / right
+            elif isinstance(node.op, ast.Mod):
+                return left % right
+            elif isinstance(node.op, ast.Pow):
+                return left ** right
+            raise ValueError(f"Unsupported binary operator: {type(node.op).__name__}")
+
+        def visit_Name(self, node):
+            if node.id in allowed_functions:
+                return allowed_functions[node.id]
+            elif node.id == 'math':
+                return allowed_functions['math']
+            raise ValueError(f"Disallowed name: {node.id}")
+
+        def visit_Call(self, node):
+            func = self.visit(node.func)
+            args = [self.visit(arg) for arg in node.args]
+            if func in allowed_functions.values():
+                return func(*args)
+            elif isinstance(func, dict) and len(args) == 1 and args[0] in func:
+                return func[args[0]]
+            raise ValueError(f"Disallowed function call: {func}")
+
+        def visit_Attribute(self, node):
+            value = self.visit(node.value)
+            if isinstance(value, dict) and node.attr in value:
+                return value[node.attr]
+            raise ValueError(f"Disallowed attribute: {node.attr}")
+
+    try:
+        evaluator = Evaluator()
+        result = evaluator.visit(node.body)
+        return result
+    except ZeroDivisionError:
+        raise ValueError("Division by zero")
+    except Exception as e:
+        raise ValueError(f"Error evaluating expression: {str(e)}")
+
+def main():
+    print("Calculadora segura. Ingresa una expresión matemática o 'salir' para terminar.")
+    print("Operaciones permitidas: + - * / % ^ ( )")
+    print("Funciones permitidas: abs, min, max, round, pow, sum, sin, cos, tan, sqrt, log, log10, exp")
+    print("Constantes: pi (o π), e")
+
+    while True:
+        try:
+            expr = input("\n> ")
+            if expr.lower() in ('salir', 'exit', 'quit'):
+                break
+
+            if not expr:
+                continue
+
+            result = safe_eval(expr)
+            print(f"Resultado: {result}")
+
+        except ValueError as e:
+            print(f"Error: {e}")
+        except KeyboardInterrupt:
+            print("\nSaliendo...")
+            break
+        except Exception as e:
+            print(f"Error inesperado: {e}")
+
+if __name__ == "__main__":
+    main()

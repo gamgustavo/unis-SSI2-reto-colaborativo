@@ -1,0 +1,153 @@
+import os
+import uuid
+from flask import Flask, request, jsonify, current_app
+from werkzeug.utils import secure_filename
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
+import imghdr
+
+app = Flask(__name__)
+
+# Configuración segura
+app.config.update(
+    MAX_CONTENT_LENGTH=2 * 1024 * 1024,  # 2MB máximo
+    UPLOAD_FOLDER='uploads/profiles',
+    ALLOWED_EXTENSIONS={'png', 'jpg', 'jpeg', 'gif'},
+    ALLOWED_MIME_TYPES={'image/jpeg', 'image/png', 'image/gif'},
+    SECRET_KEY=os.urandom(24)  # Clave secreta aleatoria para producción
+)
+
+# Crear directorio de subidas si no existe
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def allowed_file(filename):
+    """Verificar extensión y tipo MIME del archivo"""
+    if '.' not in filename:
+        return False
+
+    ext = filename.rsplit('.', 1)[1].lower()
+    if ext not in app.config['ALLOWED_EXTENSIONS']:
+        return False
+
+    # Verificar tipo MIME real
+    file = request.files.get('file')
+    if not file:
+        return False
+
+    # Leer los primeros bytes para verificar el tipo real
+    file.seek(0)
+    header = file.read(32)
+    file.seek(0)
+
+    file_type = imghdr.what(None, h=header)
+    if file_type not in app.config['ALLOWED_EXTENSIONS']:
+        return False
+
+    # Verificar MIME type reportado
+    mime_type = file.content_type
+    if mime_type not in app.config['ALLOWED_MIME_TYPES']:
+        return False
+
+    return True
+
+def validate_image_content(file_stream):
+    """Validar que el contenido sea realmente una imagen"""
+    try:
+        # Verificar que no sea un archivo malicioso
+        file_stream.seek(0)
+        header = file_stream.read(8)
+        file_stream.seek(0)
+
+        # Firmas mágicas comunes para imágenes
+        image_signatures = {
+            b'\x89PNG\r\n\x1a\n': 'png',
+            b'\xff\xd8\xff': 'jpeg',
+            b'GIF87a': 'gif',
+            b'GIF89a': 'gif'
+        }
+
+        for sig, ext in image_signatures.items():
+            if header.startswith(sig):
+                return True
+
+        return False
+    except Exception:
+        return False
+
+@app.route('/api/profile/upload', methods=['POST'])
+def upload_profile_image():
+    """Endpoint seguro para subir imagen de perfil"""
+
+    # 1. Verificar que el request tenga el archivo
+    if 'file' not in request.files:
+        raise BadRequest('No se proporcionó ningún archivo')
+
+    file = request.files['file']
+
+    # 2. Verificar que el archivo no esté vacío
+    if file.filename == '':
+        raise BadRequest('Nombre de archivo vacío')
+
+    # 3. Verificar tipo y extensión del archivo
+    if not allowed_file(file.filename):
+        raise UnsupportedMediaType('Tipo de archivo no permitido')
+
+    # 4. Validar contenido real del archivo
+    if not validate_image_content(file.stream):
+        raise BadRequest('Contenido de archivo no válido')
+
+    # 5. Generar nombre de archivo seguro y único
+    try:
+        ext = secure_filename(file.filename).rsplit('.', 1)[1].lower()
+        unique_id = str(uuid.uuid4())
+        filename = f"profile_{unique_id}.{ext}"
+        secure_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+        # 6. Guardar el archivo con nombre seguro
+        file.seek(0)  # Asegurar que estamos al inicio del stream
+        file.save(secure_path)
+
+        # 7. Verificar que el archivo se guardó correctamente
+        if not os.path.exists(secure_path):
+            raise BadRequest('Error al guardar el archivo')
+
+        # 8. Verificar tamaño del archivo guardado
+        file_size = os.path.getsize(secure_path)
+        if file_size > app.config['MAX_CONTENT_LENGTH']:
+            os.remove(secure_path)
+            raise BadRequest('El archivo excede el tamaño máximo permitido')
+
+        # 9. Verificar que el archivo guardado sea realmente una imagen
+        if imghdr.what(secure_path) is None:
+            os.remove(secure_path)
+            raise BadRequest('El archivo no es una imagen válida')
+
+        # 10. Retornar respuesta exitosa
+        return jsonify({
+            'success': True,
+            'message': 'Imagen de perfil subida correctamente',
+            'filename': filename,
+            'path': f"/static/profiles/{filename}"
+        }), 201
+
+    except Exception as e:
+        # Limpiar archivo si ocurrió un error
+        if 'secure_path' in locals() and os.path.exists(secure_path):
+            os.remove(secure_path)
+        raise BadRequest(f'Error al procesar la imagen: {str(e)}')
+
+# Manejo de errores
+@app.errorhandler(BadRequest)
+def handle_bad_request(e):
+    return jsonify({'success': False, 'error': str(e)}), 400
+
+@app.errorhandler(UnsupportedMediaType)
+def handle_unsupported_media_type(e):
+    return jsonify({'success': False, 'error': str(e)}), 415
+
+@app.errorhandler(413)
+def handle_payload_too_large(e):
+    return jsonify({'success': False, 'error': 'El archivo es demasiado grande'}), 413
+
+if __name__ == '__main__':
+    # Configuración adicional para producción
+    app.run(debug=False, host='0.0.0.0')

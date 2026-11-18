@@ -1,0 +1,42 @@
+```python
+import os
+from flask import Flask, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app = Flask(__name__)
+
+# Configuración segura por defecto
+app.config.update(
+    SECRET_KEY=os.urandom(32),  # Clave secreta aleatoria para sesiones
+    SESSION_COOKIE_SECURE=True,  # Solo enviar cookies sobre HTTPS
+    SESSION_COOKIE_HTTPONLY=True,  # Evitar acceso a cookies desde JavaScript
+    SESSION_COOKIE_SAMESITE='Lax',  # Protección CSRF básica
+    PERMANENT_SESSION_LIFETIME=1800,  # Sesiones expiran en 30 minutos
+    JSON_SORT_KEYS=False,  # Evitar fugas de información por orden de claves
+)
+
+# Middleware para aplicaciones detrás de proxy (ej: Nginx)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+@app.route('/')
+def home():
+    """Ruta de inicio segura con respuesta JSON."""
+    response = jsonify({
+        'status': 'success',
+        'message': 'Bienvenido a la aplicación Flask segura',
+        'data': None
+    })
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+
+if __name__ == '__main__':
+    # Configuración segura para desarrollo (usar Gunicorn/Waitress en producción)
+    app.run(
+        host='127.0.0.1',  # Solo accesible localmente
+        port=5000,
+        ssl_context='adhoc' if os.getenv('FLASK_ENV') == 'development' else None,
+        debug=False  # Nunca habilitar debug en producción
+    )
+```

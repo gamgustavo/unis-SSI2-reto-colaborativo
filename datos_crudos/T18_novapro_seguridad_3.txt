@@ -1,0 +1,51 @@
+```python
+from flask import Flask, request, redirect, url_for, flash, session
+from werkzeug.security import check_password_hash
+import functools
+
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'  # Cambia esto por una clave secreta segura
+
+# Simulación de una base de datos de usuarios
+users_db = {
+    'user1': {'password': '$2b$12$bMMRlB9y55vN5Y5XDZ8C.OJX696fTJiVuLtW5XDZ8C.OJX696fTJi'},  # contraseña: password1
+    'user2': {'password': '$2b$12$bMMRlB9y55vN5Y5XDZ8C.OJX696fTJiVuLtW5XDZ8C.OJX696fTJi'},  # contraseña: password2
+}
+
+def login_required(view):
+    @functools.wraps(view)
+    def wrapped_view(**kwargs):
+        if 'username' not in session:
+            return redirect(url_for('login', next=request.url))
+        return view(**kwargs)
+    return wrapped_view
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        next_page = request.args.get('next') or url_for('index')
+
+        user = users_db.get(username)
+        if user and check_password_hash(user['password'], password):
+            session['username'] = username
+            return redirect(next_page)
+        else:
+            flash('Credenciales inválidas', 'error')
+    return '''
+        <form method="post">
+            Username: <input type="text" name="username"><br>
+            Password: <input type="password" name="password"><br>
+            <input type="submit" value="Login">
+        </form>
+    '''
+
+@app.route('/')
+@login_required
+def index():
+    return f"Bienvenido, {session['username']}!"
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```

@@ -1,0 +1,82 @@
+import sqlite3
+from hashlib import sha256
+import os
+import secrets
+
+# Configuración de la base de datos
+DB_NAME = 'users.db'
+
+def init_db():
+    """Inicializa la base de datos con la tabla de usuarios."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL
+            )
+        ''')
+        conn.commit()
+
+def hash_password(password: str, salt: str = None) -> tuple:
+    """Genera un hash seguro para la contraseña usando SHA-256 y un salt aleatorio."""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    password_hash = sha256((password + salt).encode()).hexdigest()
+    return password_hash, salt
+
+def register_user(username: str, password: str) -> bool:
+    """
+    Registra un nuevo usuario en la base de datos.
+
+    Args:
+        username: Nombre de usuario.
+        password: Contraseña en texto plano.
+
+    Returns:
+        bool: True si el registro fue exitoso, False si el usuario ya existe.
+    """
+    password_hash, salt = hash_password(password)
+
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)',
+                (username, password_hash, salt)
+            )
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+def verify_password(username: str, password: str) -> bool:
+    """
+    Verifica si la contraseña proporcionada coincide con la almacenada.
+
+    Args:
+        username: Nombre de usuario.
+        password: Contraseña en texto plano a verificar.
+
+    Returns:
+        bool: True si la contraseña es correcta, False en caso contrario.
+    """
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT password_hash, salt FROM users WHERE username = ?',
+            (username,)
+        )
+        result = cursor.fetchone()
+
+    if not result:
+        return False
+
+    stored_hash, salt = result
+    input_hash, _ = hash_password(password, salt)
+    return input_hash == stored_hash
+
+# Inicializar la base de datos al importar el módulo
+init_db()

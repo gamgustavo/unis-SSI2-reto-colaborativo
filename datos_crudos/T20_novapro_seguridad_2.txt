@@ -1,0 +1,32 @@
+```python
+import os
+import zipfile
+from zipfile import ZipFile
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+def extract_zip(uploaded_zip_path):
+    downloads_folder = Path('descargas')
+    downloads_folder.mkdir(parents=True, exist_ok=True)
+
+    with TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        
+        with ZipFile(uploaded_zip_path, 'r') as zip_ref:
+            # Verificar que el archivo ZIP no contenga rutas absolutas o relativas peligrosas
+            for zip_info in zip_ref.infolist():
+                if not zip_info.filename.startswith('.'):
+                    if '/' in zip_info.filename or '\\' in zip_info.filename:
+                        raise ValueError("El archivo ZIP contiene rutas peligrosas")
+            
+            zip_ref.extractall(temp_dir_path)
+            
+            # Mover los archivos extraídos a la carpeta 'descargas'
+            for extracted_file in temp_dir_path.glob('**/*'):
+                if extracted_file.is_file():
+                    dest_path = downloads_folder / extracted_file.relative_to(temp_dir_path)
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(str(extracted_file), str(dest_path))
+
+    return str(downloads_folder)
+```

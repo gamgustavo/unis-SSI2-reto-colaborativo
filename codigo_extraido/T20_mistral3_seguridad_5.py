@@ -1,0 +1,79 @@
+import os
+import zipfile
+import tempfile
+from pathlib import Path
+import shutil
+
+def extraer_zip_seguro(archivo_zip, carpeta_destino='descargas'):
+    """
+    Extrae de forma segura el contenido de un archivo ZIP subido por el usuario.
+
+    Args:
+        archivo_zip: Objeto de archivo (FileStorage) subido por el usuario.
+        carpeta_destino: Ruta relativa o absoluta donde se extraerá el contenido.
+
+    Returns:
+        bool: True si la extracción fue exitosa, False en caso contrario.
+
+    Raises:
+        ValueError: Si el archivo no es un ZIP válido o si hay intentos de path traversal.
+    """
+    # Validar que el archivo tenga extensión .zip
+    if not archivo_zip.filename.lower().endswith('.zip'):
+        raise ValueError("El archivo debe tener extensión .zip")
+
+    # Crear carpeta de destino si no existe
+    Path(carpeta_destino).mkdir(parents=True, exist_ok=True)
+
+    # Usar un directorio temporal para extraer primero y validar contenido
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_zip_path = os.path.join(temp_dir, 'uploaded.zip')
+
+        try:
+            # Guardar el archivo subido en el directorio temporal
+            archivo_zip.save(temp_zip_path)
+
+            # Verificar que el archivo sea un ZIP válido
+            if not zipfile.is_zipfile(temp_zip_path):
+                raise ValueError("El archivo no es un ZIP válido")
+
+            # Extraer en el directorio temporal y validar rutas
+            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                # Validar que no haya path traversal
+                for file_info in zip_ref.infolist():
+                    # Normalizar la ruta para evitar path traversal
+                    normalized_path = os.path.normpath(file_info.filename)
+                    if normalized_path.startswith(('..', '/', '\\')):
+                        raise ValueError("El archivo ZIP contiene rutas no permitidas (path traversal)")
+
+                    # Verificar que no se intente sobrescribir archivos fuera del destino
+                    full_path = os.path.join(temp_dir, normalized_path)
+                    if not os.path.abspath(full_path).startswith(os.path.abspath(temp_dir)):
+                        raise ValueError("Intento de escritura fuera del directorio permitido")
+
+                # Extraer todos los archivos al directorio temporal
+                zip_ref.extractall(temp_dir)
+
+            # Copiar los archivos validados al destino final
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    src_path = os.path.join(root, file)
+                    # Calcular la ruta relativa dentro del ZIP
+                    rel_path = os.path.relpath(src_path, temp_dir)
+                    dest_path = os.path.join(carpeta_destino, rel_path)
+
+                    # Crear directorios necesarios
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+                    # Copiar el archivo
+                    shutil.copy2(src_path, dest_path)
+
+            return True
+
+        except zipfile.BadZipFile:
+            raise ValueError("El archivo ZIP está corrupto o no es válido")
+        except Exception as e:
+            # Limpiar en caso de error
+            if os.path.exists(carpeta_destino):
+                shutil.rmtree(carpeta_destino, ignore_errors=True)
+            raise ValueError(f"Error al procesar el archivo ZIP: {str(e)}")

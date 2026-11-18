@@ -1,0 +1,57 @@
+```python
+from flask import Flask, request, jsonify
+import sqlite3
+from werkzeug.exceptions import NotFound, BadRequest
+import re
+
+app = Flask(__name__)
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800  # 30 minutos
+)
+
+# Validación del parámetro nombre
+def validar_nombre(nombre):
+    if not nombre or not isinstance(nombre, str):
+        return False
+    # Solo permite letras, números, espacios, guiones y guiones bajos
+    return bool(re.match(r'^[a-zA-Z0-9 _-]{1,50}$', nombre))
+
+@app.route('/usuario', methods=['GET'])
+def obtener_usuario():
+    # Validación del parámetro
+    nombre = request.args.get('nombre')
+    if not validar_nombre(nombre):
+        raise BadRequest("Parámetro 'nombre' inválido")
+
+    try:
+        # Conexión segura a la base de datos
+        with sqlite3.connect('database.db') as conn:
+            conn.row_factory = sqlite3.Row  # Para obtener resultados como diccionario
+            cursor = conn.cursor()
+
+            # Consulta parametrizada para evitar SQL Injection
+            cursor.execute("SELECT * FROM usuarios WHERE nombre = ?", (nombre,))
+            usuario = cursor.fetchone()
+
+            if not usuario:
+                raise NotFound("Usuario no encontrado")
+
+            # Convertir el resultado a diccionario y luego a JSON
+            return jsonify(dict(usuario))
+
+    except sqlite3.Error as e:
+        app.logger.error(f"Error en la base de datos: {str(e)}")
+        raise BadRequest("Error al acceder a la base de datos")
+    except Exception as e:
+        app.logger.error(f"Error inesperado: {str(e)}")
+        raise BadRequest("Error interno del servidor")
+
+if __name__ == '__main__':
+    # Configuración segura para producción (usar en conjunto con un servidor WSGI en producción)
+    app.run(ssl_context='adhoc', host='0.0.0.0', port=5000)
+```

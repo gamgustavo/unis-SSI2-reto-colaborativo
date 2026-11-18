@@ -1,0 +1,49 @@
+from flask import Flask, request, jsonify, send_file
+import os
+
+app = Flask(__name__)
+
+# Configurar la carpeta de documentos
+DOCUMENTOS_FOLDER = 'documentos'
+
+@app.route('/obtener_archivo', methods=['GET'])
+def obtener_archivo():
+    # Obtener el nombre del archivo de los parámetros de la solicitud
+    nombre_archivo = request.args.get('nombre')
+    
+    if not nombre_archivo:
+        return jsonify({'error': 'Se requiere el parámetro "nombre"'}), 400
+    
+    # Construir la ruta completa del archivo
+    ruta_archivo = os.path.join(DOCUMENTOS_FOLDER, nombre_archivo)
+    
+    # Verificar si el archivo existe
+    if not os.path.exists(ruta_archivo):
+        return jsonify({'error': f'El archivo "{nombre_archivo}" no existe'}), 404
+    
+    # Verificar que sea un archivo (no un directorio)
+    if not os.path.isfile(ruta_archivo):
+        return jsonify({'error': f'"{nombre_archivo}" no es un archivo válido'}), 400
+    
+    try:
+        # Leer y devolver el contenido del archivo
+        with open(ruta_archivo, 'r', encoding='utf-8') as archivo:
+            contenido = archivo.read()
+        
+        return jsonify({
+            'nombre_archivo': nombre_archivo,
+            'contenido': contenido
+        }), 200
+        
+    except UnicodeDecodeError:
+        # Si no se puede leer como texto, devolver el archivo como binario
+        return send_file(ruta_archivo, as_attachment=False)
+    except Exception as e:
+        return jsonify({'error': f'Error al leer el archivo: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    # Crear la carpeta documentos si no existe
+    if not os.path.exists(DOCUMENTOS_FOLDER):
+        os.makedirs(DOCUMENTOS_FOLDER)
+    
+    app.run(debug=True, port=5000)

@@ -1,0 +1,243 @@
+import os
+import time
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+import jwt
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError, InvalidSignatureError
+
+class JWTManager:
+    def __init__(self):
+        # En producción, usa secretos desde variables de entorno con valores seguros
+        self.secret_key = os.environ.get("JWT_SECRET_KEY")
+        if not self.secret_key:
+            raise ValueError("JWT_SECRET_KEY no está configurada en las variables de entorno")
+        
+        # Verifica que la clave secreta tenga suficiente longitud
+        if len(self.secret_key) < 32:
+            raise ValueError("JWT_SECRET_KEY debe tener al menos 32 caracteres para mayor seguridad")
+        
+        self.algorithm = "HS256"
+        self.access_token_expire_minutes = int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+        self.refresh_token_expire_days = int(os.environ.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+    
+    def create_access_token(self, user_data: Dict[str, Any]) -> str:
+        """
+        Crea un token JWT de acceso con datos del usuario.
+        
+        Args:
+            user_data: Diccionario con datos del usuario (ej: user_id, username, roles)
+            
+        Returns:
+            Token JWT firmado
+        """
+        # Copia los datos para no modificar el original
+        data_to_encode = user_data.copy()
+        
+        # Añade claims estándar JWT
+        now = datetime.utcnow()
+        expire = now + timedelta(minutes=self.access_token_expire_minutes)
+        
+        data_to_encode.update({
+            "exp": expire,
+            "iat": now,
+            "nbf": now,  # Not Before - no válido antes de este tiempo
+            "type": "access",
+            "jti": os.urandom(16).hex()  # ID único del token para prevenir replay attacks
+        })
+        
+        # Codifica el token
+        encoded_jwt = jwt.encode(
+            data_to_encode,
+            self.secret_key,
+            algorithm=self.algorithm
+        )
+        
+        return encoded_jwt
+    
+    def create_refresh_token(self, user_id: str) -> str:
+        """
+        Crea un token JWT de refresco.
+        
+        Args:
+            user_id: ID del usuario
+            
+        Returns:
+            Token JWT de refresco firmado
+        """
+        now = datetime.utcnow()
+        expire = now + timedelta(days=self.refresh_token_expire_days)
+        
+        payload = {
+            "sub": user_id,  # Subject - ID del usuario
+            "exp": expire,
+            "iat": now,
+            "type": "refresh",
+            "jti": os.urandom(16).hex()
+        }
+        
+        encoded_jwt = jwt.encode(
+            payload,
+            self.secret_key,
+            algorithm=self.algorithm
+        )
+        
+        return encoded_jwt
+    
+    def verify_token(self, token: str, token_type: str = "access") -> Optional[Dict[str, Any]]:
+        """
+        Verifica y decodifica un token JWT.
+        
+        Args:
+            token: Token JWT a verificar
+            token_type: Tipo de token esperado ("access" o "refresh")
+            
+        Returns:
+            Payload decodificado si es válido, None si es inválido
+        """
+        try:
+            # Decodifica y verifica el token
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm],
+                options={
+                    "require": ["exp", "iat", "type", "jti"],  # Requiere estos claims
+                    "verify_exp": True,
+                    "verify_iat": True,
+                    "verify_nbf": True
+                }
+            )
+            
+            # Verifica el tipo de token
+            if payload.get("type") != token_type:
+                return None
+            
+            # Verificación adicional de timestamps
+            current_time = time.time()
+            iat = payload.get("iat")
+            
+            # Rechaza tokens emitidos en el futuro (margen de 60 segundos para sincronización de reloj)
+            if iat and iat > current_time + 60:
+                return None
+            
+            return payload
+            
+        except ExpiredSignatureError:
+            # Token expirado
+            return None
+        except InvalidSignatureError:
+            # Firma inválida - posible manipulación del token
+            return None
+        except InvalidTokenError:
+            # Token inválido por otras razones
+            return None
+        except Exception:
+            # Cualquier otra excepción
+            return None
+    
+    def refresh_access_token(self, refresh_token: str) -> Optional[str]:
+        """
+        Crea un nuevo token de acceso a partir de un token de refresco válido.
+        
+        Args:
+            refresh_token: Token de refresco
+            
+        Returns:
+            Nuevo token de acceso o None si el token de refresco es inválido
+        """
+        # Verifica el token de refresco
+        payload = self.verify_token(refresh_token, "refresh")
+        
+        if not payload:
+            return None
+        
+        # Extrae el user_id del subject claim
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        
+        # Crea un nuevo token de acceso
+        # En una implementación real, aquí buscarías los datos del usuario desde la base de datos
+        user_data = {
+            "sub": user_id,
+            "user_id": user_id
+            # Añade otros datos del usuario según sea necesario
+        }
+        
+        return self.create_access_token(user_data)
+    
+    def blacklist_token(self, token: str) -> bool:
+        """
+        Invalida un token añadiéndolo a una lista negra.
+        En producción, implementa un sistema de lista negra con Redis o base de datos.
+        
+        Args:
+            token: Token a invalidar
+            
+        Returns:
+            True si se invalidó correctamente
+        """
+        try:
+            # Decodifica sin verificar para obtener el jti
+            payload = jwt.decode(token, options={"verify_signature": False})
+            jti = payload.get("jti")
+            
+            if jti:
+                # Aquí implementarías la lógica para almacenar el jti en una lista negra
+                # Ejemplo con Redis: redis_client.setex(f"blacklist:{jti}", expire_time, "1")
+                # Por ahora, solo es un placeholder
+                pass
+            
+            return True
+        except Exception:
+            return False
+
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configuración de ejemplo (en producción usa variables de entorno)
+    os.environ["JWT_SECRET_KEY"] = "mi_clave_secreta_muy_larga_y_compleja_1234567890"
+    os.environ["JWT_ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
+    os.environ["JWT_REFRESH_TOKEN_EXPIRE_DAYS"] = "7"
+    
+    try:
+        # Inicializa el gestor JWT
+        jwt_manager = JWTManager()
+        
+        # Datos de ejemplo del usuario
+        user_data = {
+            "user_id": "12345",
+            "username": "usuario_ejemplo",
+            "email": "usuario@ejemplo.com",
+            "roles": ["user", "admin"]
+        }
+        
+        # Crea tokens
+        access_token = jwt_manager.create_access_token(user_data)
+        refresh_token = jwt_manager.create_refresh_token(user_data["user_id"])
+        
+        print(f"Access Token: {access_token}")
+        print(f"Refresh Token: {refresh_token}")
+        
+        # Verifica el token de acceso
+        decoded = jwt_manager.verify_token(access_token, "access")
+        if decoded:
+            print(f"Token válido. Payload: {decoded}")
+        else:
+            print("Token inválido o expirado")
+        
+        # Refresca el token
+        new_access_token = jwt_manager.refresh_access_token(refresh_token)
+        if new_access_token:
+            print(f"Nuevo Access Token: {new_access_token}")
+        
+        # Intenta verificar un token manipulado
+        manipulated_token = access_token[:-5] + "abcde"
+        decoded_manipulated = jwt_manager.verify_token(manipulated_token, "access")
+        if not decoded_manipulated:
+            print("Correctamente detectado token manipulado")
+        
+    except ValueError as e:
+        print(f"Error de configuración: {e}")
+    except Exception as e:
+        print(f"Error inesperado: {e}")

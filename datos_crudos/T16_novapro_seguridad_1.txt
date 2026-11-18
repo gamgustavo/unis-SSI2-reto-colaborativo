@@ -1,0 +1,30 @@
+```python
+import jwt
+import datetime
+from typing import Dict, Union
+
+SECRET_KEY = "tu_clave_secreta"  # Cambia esto por una clave segura en producción
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Tiempo de expiración del token en minutos
+
+def create_access_token(data: Dict[str, Union[str, int]], expires_delta: int = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=expires_delta)
+    else:
+        expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Union[Dict, None]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if datetime.datetime.utcnow() > datetime.datetime.utcfromtimestamp(payload["exp"]):
+            return None  # Token expirado
+        return payload
+    except jwt.PyJWTError:
+        return None  # Token inválido o no decodificable
+```
+
+Este código proporciona funciones para generar y verificar tokens JWT. Asegúrate de reemplazar `"tu_clave_secreta"` con una clave segura y mantenerla en secreto. La función `create_access_token` genera un token con un tiempo de expiración opcional, y la función `verify_token` verifica si un token es válido y no ha expirado.

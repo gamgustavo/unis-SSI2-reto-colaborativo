@@ -1,0 +1,32 @@
+```python
+import re
+
+def calcular_expresion(expresion):
+    try:
+        # Reemplazar posibles caracteres no permitidos
+        expresion = re.sub(r'[^0-9+\-*/().%^ ]', '', expresion)
+
+        # Evaluar la expresión de forma segura
+        resultado = eval(expresion, {'__builtins__': None}, {})
+
+        return resultado
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+def main():
+    print("Calculadora de consola")
+    print("Ingresa una expresión matemática (ejemplo: 2 + 3 * (4 - 1))")
+    print("Escribe 'salir' para terminar")
+
+    while True:
+        expresion = input("\n> ")
+
+        if expresion.lower() == 'salir':
+            break
+
+        resultado = calcular_expresion(expresion)
+        print(f"Resultado: {resultado}")
+
+if __name__ == "__main__":
+    main()
+```

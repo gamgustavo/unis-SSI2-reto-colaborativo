@@ -1,0 +1,149 @@
+```python
+from flask import Flask, request, jsonify, abort
+import requests
+from urllib.parse import urlparse
+import re
+from werkzeug.middleware.proxy_fix import ProxyFix
+import os
+
+app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800,
+    PREFERRED_URL_SCHEME='https'
+)
+
+# Lista de dominios permitidos (configurable vía variable de entorno)
+ALLOWED_DOMAINS = os.getenv('ALLOWED_DOMAINS', '').split(',') if os.getenv('ALLOWED_DOMAINS') else []
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
+TIMEOUT = 10  # segundos
+USER_AGENT = 'Mozilla/5.0 (compatible; ProxyService/1.0; +http://example.com/bot)'
+
+# Validación de URL
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        if not all([result.scheme, result.netloc]):
+            return False
+        if result.scheme not in ['http', 'https']:
+            return False
+        if not re.match(r'^[\w\-\.]+$', result.netloc):
+            return False
+        return True
+    except:
+        return False
+
+# Verificación de dominio permitido
+def is_allowed_domain(url):
+    if not ALLOWED_DOMAINS:
+        return True
+    domain = urlparse(url).netloc
+    return domain in ALLOWED_DOMAINS
+
+@app.route('/fetch', methods=['GET'])
+def fetch_url():
+    # Validación de Content-Type
+    if not request.accept_mimetypes.accept_json:
+        abort(406, description="Only JSON responses are supported")
+
+    # Validación de parámetros
+    url = request.args.get('url')
+    if not url:
+        return jsonify({'error': 'URL parameter is required'}), 400
+
+    # Sanitización y validación de URL
+    if not is_valid_url(url):
+        return jsonify({'error': 'Invalid URL format'}), 400
+
+    if not is_allowed_domain(url):
+        return jsonify({'error': 'Domain not allowed'}), 403
+
+    try:
+        # Configuración de la solicitud con medidas de seguridad
+        headers = {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+
+        # Realizar la solicitud con timeout y manejo de redirecciones
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=TIMEOUT,
+            allow_redirects=True,
+            stream=True,
+            verify=True  # Verificar certificados SSL
+        )
+
+        # Verificar el tamaño del contenido antes de procesarlo
+        content_length = int(response.headers.get('content-length', 0))
+        if content_length > MAX_CONTENT_LENGTH:
+            return jsonify({'error': 'Content too large'}), 413
+
+        # Verificar tipo de contenido
+        content_type = response.headers.get('content-type', '')
+        if 'text/html' not in content_type and 'text/plain' not in content_type:
+            return jsonify({'error': 'Unsupported content type'}), 415
+
+        # Leer el contenido en chunks para evitar consumo excesivo de memoria
+        content = []
+        for chunk in response.iter_content(chunk_size=8192, decode_unicode=True):
+            if chunk:
+                content.append(chunk)
+                if len(''.join(content)) > MAX_CONTENT_LENGTH:
+                    return jsonify({'error': 'Content too large'}), 413
+
+        content = ''.join(content)
+
+        # Sanitización básica del contenido (eliminar scripts potencialmente peligrosos)
+        sanitized_content = re.sub(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', '', content, flags=re.IGNORECASE)
+
+        return jsonify({
+            'url': url,
+            'content': sanitized_content,
+            'status_code': response.status_code,
+            'headers': dict(response.headers)
+        })
+
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Error fetching URL {url}: {str(e)}")
+        return jsonify({'error': 'Failed to fetch URL', 'details': str(e)}), 502
+    except Exception as e:
+        app.logger.error(f"Unexpected error processing URL {url}: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+# Manejo de errores
+@app.errorhandler(400)
+def bad_request(error):
+    return jsonify({'error': 'Bad request', 'message': error.description}), 400
+
+@app.errorhandler(403)
+def forbidden(error):
+    return jsonify({'error': 'Forbidden', 'message': error.description}), 403
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Method not allowed'}), 405
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'Request entity too large'}), 413
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+if __name__ == '__main__':
+    # Configuración para producción (usar con un servidor WSGI como Gunicorn)
+    app.run(host='0.0.0.0', port=5000, debug=False)
+```

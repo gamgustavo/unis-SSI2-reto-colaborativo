@@ -1,0 +1,19 @@
+import tempfile
+import os
+
+def guardar_reporte_temporal(datos, sufijo='.txt'):
+    """
+    Guarda datos en un archivo temporal y devuelve la ruta del archivo.
+
+    Args:
+        datos: Datos a guardar (str o bytes).
+        sufijo: Sufijo del archivo temporal (por defecto '.txt').
+
+    Returns:
+        str: Ruta del archivo temporal creado.
+    """
+    with tempfile.NamedTemporaryFile(mode='w+b', suffix=sufijo, delete=False) as temp_file:
+        if isinstance(datos, str):
+            datos = datos.encode('utf-8')
+        temp_file.write(datos)
+        return temp_file.name

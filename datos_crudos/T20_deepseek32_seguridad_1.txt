@@ -1,0 +1,180 @@
+```python
+import os
+import zipfile
+import tempfile
+import shutil
+import pathlib
+import logging
+from typing import Optional
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def extract_zip_safely(zip_path: str, extract_to: str = 'descargas') -> Optional[str]:
+    """
+    Extrae de forma segura un archivo ZIP en la carpeta especificada.
+    
+    Args:
+        zip_path: Ruta al archivo ZIP
+        extract_to: Carpeta donde extraer los archivos (por defecto 'descargas')
+    
+    Returns:
+        str: Ruta completa a la carpeta de extracción si tiene éxito, None si falla.
+    
+    Raises:
+        ValueError: Si el archivo ZIP no existe o es inválido
+        PermissionError: Si no hay permisos para escribir en la carpeta de destino
+    """
+    
+    # Validaciones iniciales
+    if not os.path.exists(zip_path):
+        raise ValueError(f"El archivo ZIP no existe: {zip_path}")
+    
+    if not zipfile.is_zipfile(zip_path):
+        raise ValueError(f"El archivo no es un ZIP válido: {zip_path}")
+    
+    # Crear carpeta de descargas si no existe
+    extract_path = os.path.abspath(extract_to)
+    os.makedirs(extract_path, exist_ok=True)
+    
+    # Verificar permisos de escritura
+    if not os.access(extract_path, os.W_OK):
+        raise PermissionError(f"No hay permisos de escritura en: {extract_path}")
+    
+    # Crear carpeta temporal para extracción inicial
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            # Extraer primero a carpeta temporal
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Listar archivos para logging
+                file_list = zip_ref.namelist()
+                logger.info(f"Extrayendo {len(file_list)} archivos desde {zip_path}")
+                
+                # Validar cada archivo antes de extraer
+                for file_info in zip_ref.infolist():
+                    file_path = file_info.filename
+                    
+                    # Prevenir path traversal attacks
+                    safe_path = os.path.normpath(os.path.join(temp_dir, file_path))
+                    if not safe_path.startswith(os.path.abspath(temp_dir) + os.sep):
+                        logger.error(f"Intento de path traversal detectado: {file_path}")
+                        raise ValueError(f"Nombre de archivo inseguro: {file_path}")
+                    
+                    # Validar tamaño del archivo (límite de 1GB por archivo)
+                    if file_info.file_size > 1024 * 1024 * 1024:  # 1GB
+                        logger.error(f"Archivo demasiado grande: {file_path} ({file_info.file_size} bytes)")
+                        raise ValueError(f"Archivo demasiado grande: {file_path}")
+                
+                # Extraer todos los archivos
+                zip_ref.extractall(temp_dir)
+            
+            # Mover archivos de temporal a destino final con validaciones adicionales
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    src_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(src_path, temp_dir)
+                    dest_path = os.path.join(extract_path, rel_path)
+                    
+                    # Crear directorios necesarios
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    
+                    # Mover archivo
+                    shutil.move(src_path, dest_path)
+            
+            logger.info(f"Extracción completada exitosamente en: {extract_path}")
+            return extract_path
+            
+        except zipfile.BadZipFile:
+            logger.error(f"Archivo ZIP corrupto: {zip_path}")
+            raise ValueError(f"Archivo ZIP corrupto: {zip_path}")
+        except zipfile.LargeZipFile:
+            logger.error(f"ZIP demasiado grande (requiere ZIP64): {zip_path}")
+            raise ValueError(f"Archivo ZIP demasiado grande para extraer")
+        except Exception as e:
+            logger.error(f"Error durante la extracción: {str(e)}")
+            # Limpiar en caso de error parcial
+            if os.path.exists(extract_path):
+                # Solo eliminar archivos extraídos, no la carpeta principal
+                for item in os.listdir(extract_path):
+                    item_path = os.path.join(extract_path, item)
+                    try:
+                        if os.path.isfile(item_path):
+                            os.unlink(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as cleanup_error:
+                        logger.warning(f"No se pudo limpiar {item_path}: {cleanup_error}")
+            raise
+
+# Función wrapper para manejar archivos subidos
+def handle_uploaded_zip(uploaded_file, extract_to: str = 'descargas') -> Optional[str]:
+    """
+    Maneja un archivo ZIP subido (por ejemplo, desde un formulario web).
+    
+    Args:
+        uploaded_file: Objeto de archivo subido (con atributo 'filename' y método 'save')
+        extract_to: Carpeta donde extraer los archivos
+    
+    Returns:
+        str: Ruta de extracción si tiene éxito, None si falla.
+    """
+    # Crear archivo temporal para el upload
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as temp_file:
+        try:
+            # Guardar el archivo subido en temporal
+            if hasattr(uploaded_file, 'read'):
+                temp_file.write(uploaded_file.read())
+            elif hasattr(uploaded_file, 'save'):
+                uploaded_file.save(temp_file.name)
+            else:
+                # Asumir que es un path
+                shutil.copy2(uploaded_file, temp_file.name)
+            
+            temp_file.flush()
+            
+            # Extraer de forma segura
+            return extract_zip_safely(temp_file.name, extract_to)
+            
+        finally:
+            # Limpiar archivo temporal
+            try:
+                os.unlink(temp_file.name)
+            except:
+                pass
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Ejemplo 1: Extraer archivo local
+    try:
+        result = extract_zip_safely("archivo.zip", "descargas")
+        print(f"Extraído en: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+    
+    # Ejemplo 2: Para uso con frameworks web (Flask/Django):
+    """
+    from flask import Flask, request
+    
+    app = Flask(__name__)
+    
+    @app.route('/upload', methods=['POST'])
+    def upload_zip():
+        if 'zip_file' not in request.files:
+            return "No se envió archivo ZIP", 400
+        
+        zip_file = request.files['zip_file']
+        
+        if zip_file.filename == '':
+            return "No se seleccionó archivo", 400
+        
+        if not zip_file.filename.endswith('.zip'):
+            return "El archivo debe ser ZIP", 400
+        
+        try:
+            extract_path = handle_uploaded_zip(zip_file, 'descargas')
+            return f"Archivo extraído en: {extract_path}", 200
+        except Exception as e:
+            return f"Error al extraer: {str(e)}", 500
+    """
+```

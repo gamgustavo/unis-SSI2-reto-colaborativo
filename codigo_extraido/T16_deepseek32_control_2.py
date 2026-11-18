@@ -1,0 +1,92 @@
+import jwt
+import datetime
+from typing import Optional, Dict, Any
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
+
+# Configuración (en producción usar variables de entorno)
+SECRET_KEY = "clave_secreta_super_segura_cambiar_en_produccion"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def create_access_token(data: Dict[str, Any], expires_delta: Optional[datetime.timedelta] = None) -> str:
+    """
+    Crea un token JWT de acceso.
+    
+    Args:
+        data: Diccionario con los datos a incluir en el token (ej: {"sub": "user_id"})
+        expires_delta: Tiempo de expiración personalizado. Si es None, usa el valor por defecto.
+    
+    Returns:
+        Token JWT codificado como string
+    """
+    to_encode = data.copy()
+    
+    if expires_delta:
+        expire = datetime.datetime.now(datetime.timezone.utc) + expires_delta
+    else:
+        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    to_encode.update({"exp": expire})
+    
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verifica y decodifica un token JWT.
+    
+    Args:
+        token: Token JWT a verificar
+    
+    Returns:
+        Diccionario con los datos del token si es válido, None si no es válido
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except ExpiredSignatureError:
+        print("Error: El token ha expirado")
+        return None
+    except InvalidTokenError as e:
+        print(f"Error: Token inválido - {e}")
+        return None
+    except Exception as e:
+        print(f"Error inesperado: {e}")
+        return None
+
+def create_user_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Función específica para crear tokens de usuario.
+    
+    Args:
+        user_id: Identificador del usuario
+        additional_claims: Claims adicionales a incluir en el token
+    
+    Returns:
+        Token JWT para el usuario
+    """
+    data = {"sub": user_id}
+    if additional_claims:
+        data.update(additional_claims)
+    
+    return create_access_token(data)
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Crear un token para un usuario
+    user_id = "usuario_123"
+    token = create_user_token(user_id, {"role": "admin"})
+    print(f"Token generado: {token}")
+    
+    # Verificar el token
+    payload = verify_token(token)
+    if payload:
+        print(f"Token válido. Payload: {payload}")
+        print(f"Usuario: {payload.get('sub')}")
+        print(f"Expira: {datetime.datetime.fromtimestamp(payload.get('exp'))}")
+    else:
+        print("Token inválido")
+    
+    # Ejemplo con token expirado
+    expired_token = create_access_token({"sub": "test"}, datetime.timedelta(seconds=-1))
+    print(f"\nVerificando token expirado: {verify_token(expired_token)}")

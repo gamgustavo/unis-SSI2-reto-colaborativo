@@ -1,0 +1,18 @@
+```python
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return jsonify(message="Bienvenido a la aplicación Flask segura"), 200
+
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=5000, debug=False, ssl_context=('path/to/cert.pem', 'path/to/key.pem'))
+```
+
+**Notas de seguridad:**
+1. **SSL/TLS:** Usa `ssl_context` para habilitar HTTPS.
+2. **Host y Puerto:** Limita el host a `127.0.0.1` para desarrollo; usa un servidor web para producción.
+3. **Modo Debug:** Desactiva `debug` en producción.
+4. **Ruta de Archivos SSL:** Reemplaza `'path/to/cert.pem'` y `'path/to/key.pem'` con las rutas correctas a tus certificados.

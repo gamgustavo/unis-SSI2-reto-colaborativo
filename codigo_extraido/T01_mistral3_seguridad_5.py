@@ -1,0 +1,83 @@
+from flask import Flask, request, jsonify
+import sqlite3
+from werkzeug.exceptions import NotFound, BadRequest
+import re
+
+app = Flask(__name__)
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800  # 30 minutos
+)
+
+DATABASE = 'usuarios.db'
+
+def get_db_connection():
+    """Crea y retorna una conexión a la base de datos SQLite."""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row  # Permite acceder a las columnas por nombre
+    return conn
+
+def validate_input(input_str, max_length=50):
+    """Valida que el input sea seguro y cumpla con los requisitos."""
+    if not input_str or not isinstance(input_str, str):
+        raise BadRequest("Nombre inválido: debe ser una cadena no vacía")
+
+    if len(input_str) > max_length:
+        raise BadRequest(f"Nombre demasiado largo: máximo {max_length} caracteres")
+
+    # Permitir solo letras, números, espacios y algunos caracteres especiales comunes
+    if not re.match(r'^[a-zA-Z0-9áéíóúüñÁÉÍÓÚÜÑ\s\-\.\']+$', input_str):
+        raise BadRequest("Nombre contiene caracteres no permitidos")
+
+    return input_str.strip()
+
+@app.route('/usuario', methods=['GET'])
+def get_usuario():
+    """Endpoint para buscar un usuario por nombre."""
+    try:
+        # Obtener y validar el parámetro 'nombre'
+        nombre = request.args.get('nombre')
+        if not nombre:
+            raise BadRequest("El parámetro 'nombre' es obligatorio")
+
+        nombre_validado = validate_input(nombre)
+
+        # Consultar la base de datos
+        conn = get_db_connection()
+        try:
+            # Usar parámetros para evitar SQL Injection
+            query = "SELECT id, nombre, email, fecha_registro FROM usuarios WHERE nombre = ? COLLATE NOCASE"
+            usuario = conn.execute(query, (nombre_validado,)).fetchone()
+
+            if not usuario:
+                raise NotFound("Usuario no encontrado")
+
+            # Convertir el resultado a un diccionario
+            usuario_dict = dict(usuario)
+
+            # Eliminar información sensible si existiera (aunque en este ejemplo no hay)
+            usuario_dict.pop('password', None)  # Por si acaso la tabla tiene este campo
+
+            return jsonify(usuario_dict)
+
+        except sqlite3.Error as e:
+            app.logger.error(f"Error en la base de datos: {str(e)}")
+            raise BadRequest("Error al buscar el usuario")
+        finally:
+            conn.close()
+
+    except BadRequest as e:
+        return jsonify({"error": str(e)}), 400
+    except NotFound as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        app.logger.error(f"Error inesperado: {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+if __name__ == '__main__':
+    # Configuración para producción (usar en conjunto con un servidor WSGI como Gunicorn)
+    app.run(host='0.0.0.0', port=5000, debug=False)

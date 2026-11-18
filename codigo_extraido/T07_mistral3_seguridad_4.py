@@ -1,0 +1,190 @@
+import json
+import base64
+import hashlib
+import hmac
+import secrets
+from typing import Dict, Any, Optional
+from cryptography.fernet import Fernet, InvalidToken
+
+class SessionReconstructor:
+    """
+    Secure session reconstructor that handles session cookies with integrity and confidentiality protections.
+    Implements best practices to prevent common vulnerabilities (OWASP Top 10).
+    """
+
+    def __init__(self, secret_key: str, encryption_key: Optional[str] = None):
+        """
+        Initialize with secret keys.
+
+        Args:
+            secret_key: Secret key for HMAC signature (should be at least 32 bytes)
+            encryption_key: Optional encryption key (32 url-safe base64-encoded bytes)
+        """
+        if not secret_key or len(secret_key) < 32:
+            raise ValueError("Secret key must be at least 32 characters long")
+
+        self.secret_key = secret_key.encode('utf-8')
+        self.encryption_enabled = encryption_key is not None
+
+        if self.encryption_enabled:
+            try:
+                # Validate encryption key format
+                if len(encryption_key) != 44:  # 32 bytes base64 encoded
+                    raise ValueError("Encryption key must be 32 url-safe base64-encoded bytes")
+                self.cipher_suite = Fernet(encryption_key.encode('utf-8'))
+            except Exception as e:
+                raise ValueError(f"Invalid encryption key: {str(e)}")
+
+    def _generate_hmac(self, data: bytes) -> bytes:
+        """Generate HMAC signature for data integrity verification."""
+        return hmac.new(self.secret_key, data, hashlib.sha256).digest()
+
+    def _verify_hmac(self, data: bytes, signature: bytes) -> bool:
+        """Verify HMAC signature."""
+        expected_signature = self._generate_hmac(data)
+        return hmac.compare_digest(expected_signature, signature)
+
+    def _serialize_session(self, session_data: Dict[str, Any]) -> bytes:
+        """Safely serialize session data to JSON bytes."""
+        try:
+            # Remove potentially dangerous attributes
+            safe_data = {
+                k: v for k, v in session_data.items()
+                if not k.startswith('_') and not callable(v)
+            }
+            return json.dumps(safe_data, separators=(',', ':')).encode('utf-8')
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid session data: {str(e)}")
+
+    def _deserialize_session(self, data: bytes) -> Dict[str, Any]:
+        """Safely deserialize session data from JSON bytes."""
+        try:
+            session_data = json.loads(data.decode('utf-8'))
+            if not isinstance(session_data, dict):
+                raise ValueError("Session data must be a dictionary")
+            return session_data
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise ValueError(f"Invalid session format: {str(e)}")
+
+    def _encrypt_data(self, data: bytes) -> bytes:
+        """Encrypt data using Fernet symmetric encryption."""
+        if not self.encryption_enabled:
+            return data
+        return self.cipher_suite.encrypt(data)
+
+    def _decrypt_data(self, encrypted_data: bytes) -> bytes:
+        """Decrypt data using Fernet symmetric encryption."""
+        if not self.encryption_enabled:
+            return encrypted_data
+        try:
+            return self.cipher_suite.decrypt(encrypted_data)
+        except InvalidToken:
+            raise ValueError("Invalid or corrupted encrypted data")
+
+    def reconstruct_session(self, session_cookie: bytes) -> Dict[str, Any]:
+        """
+        Reconstruct session from secure cookie value.
+
+        Args:
+            session_cookie: The raw session cookie value in bytes
+
+        Returns:
+            Dictionary containing the session data
+
+        Raises:
+            ValueError: If the cookie is invalid, tampered with, or corrupted
+        """
+        if not session_cookie or len(session_cookie) < 64:  # Minimum size for signature
+            raise ValueError("Invalid session cookie: too short")
+
+        try:
+            # Split the cookie into components
+            if self.encryption_enabled:
+                # Format: base64(iv + ciphertext + signature)
+                decoded = base64.urlsafe_b64decode(session_cookie)
+                if len(decoded) < 64:  # Minimum size for signature + IV
+                    raise ValueError("Invalid encrypted cookie format")
+
+                # Extract signature (last 32 bytes)
+                signature = decoded[-32:]
+                encrypted_data = decoded[:-32]
+
+                # Verify signature before decryption
+                if not self._verify_hmac(encrypted_data, signature):
+                    raise ValueError("Invalid session signature - possible tampering")
+
+                # Decrypt the data
+                decrypted_data = self._decrypt_data(encrypted_data)
+            else:
+                # Format: base64(data + signature)
+                decoded = base64.urlsafe_b64decode(session_cookie)
+                if len(decoded) < 32:  # Minimum size for signature
+                    raise ValueError("Invalid cookie format")
+
+                # Extract signature (last 32 bytes)
+                signature = decoded[-32:]
+                data = decoded[:-32]
+
+                # Verify signature
+                if not self._verify_hmac(data, signature):
+                    raise ValueError("Invalid session signature - possible tampering")
+
+                decrypted_data = data
+
+            # Deserialize the session data
+            return self._deserialize_session(decrypted_data)
+
+        except (base64.binascii.Error, UnicodeDecodeError) as e:
+            raise ValueError(f"Invalid cookie encoding: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"Failed to reconstruct session: {str(e)}")
+
+    def create_session_cookie(self, session_data: Dict[str, Any]) -> bytes:
+        """
+        Create a secure session cookie from session data.
+
+        Args:
+            session_data: Dictionary containing session data
+
+        Returns:
+            Secure session cookie in bytes
+        """
+        # Serialize session data
+        serialized_data = self._serialize_session(session_data)
+
+        # Encrypt if enabled
+        processed_data = self._encrypt_data(serialized_data)
+
+        # Generate HMAC signature
+        signature = self._generate_hmac(processed_data)
+
+        # Combine data and signature
+        if self.encryption_enabled:
+            cookie_data = processed_data + signature
+        else:
+            cookie_data = serialized_data + signature
+
+        # Base64 encode for safe transmission
+        return base64.urlsafe_b64encode(cookie_data)
+
+# Example usage and security considerations:
+"""
+# Secure configuration example:
+SECRET_KEY = secrets.token_urlsafe(32)  # 32 bytes = 256 bits
+ENCRYPTION_KEY = Fernet.generate_key().decode('utf-8')  # 32 url-safe base64-encoded bytes
+
+# Initialize reconstructor
+reconstructor = SessionReconstructor(
+    secret_key=SECRET_KEY,
+    encryption_key=ENCRYPTION_KEY  # Enable encryption for confidentiality
+)
+
+# Security best practices:
+# 1. Store secret keys securely (environment variables, secret management system)
+# 2. Rotate keys periodically
+# 3. Use HTTPS to prevent cookie interception
+# 4. Set Secure, HttpOnly, and SameSite cookie attributes
+# 5. Implement proper session expiration
+# 6. Validate all session data on reconstruction
+# 7. Consider adding additional context to HMAC (e.g., user IP, user agent)
+"""

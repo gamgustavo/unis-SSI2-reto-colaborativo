@@ -1,0 +1,25 @@
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+# Configuración básica de seguridad
+app.config['SECRET_KEY'] = 'una_clave_secreta_muy_segura'
+app.config['JSON_SORT_KEYS'] = False
+
+# Ruta de inicio segura
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify(message="Bienvenido a la aplicación Flask segura"), 200
+
+# Manejo de errores común para evitar revelar información sensible
+@app.errorhandler(404)
+def resource_not_found(e):
+    return jsonify(error=str(e)), 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return jsonify(error="Ha ocurrido un error interno del servidor"), 500
+
+if __name__ == '__main__':
+    # Ejecutar la aplicación con opciones seguras
+    app.run(ssl_context='adhoc', host='127.0.0.1', port=5000)

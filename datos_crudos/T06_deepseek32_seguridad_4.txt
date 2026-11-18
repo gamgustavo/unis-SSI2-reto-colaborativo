@@ -1,0 +1,227 @@
+```python
+import secrets
+import string
+import hashlib
+import hmac
+import time
+from typing import Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import json
+import base64
+
+@dataclass
+class TokenValidationResult:
+    is_valid: bool
+    user_id: Optional[str] = None
+    error: Optional[str] = None
+
+class PasswordResetTokenManager:
+    def __init__(self, secret_key: str, token_expiry_hours: int = 24):
+        """
+        Inicializa el gestor de tokens de restablecimiento de contraseña.
+        
+        Args:
+            secret_key: Clave secreta para firmar los tokens (debe ser segura y almacenada de forma segura)
+            token_expiry_hours: Horas de validez del token (por defecto 24 horas)
+        """
+        if not secret_key or len(secret_key) < 32:
+            raise ValueError("La clave secreta debe tener al menos 32 caracteres")
+        
+        self.secret_key = secret_key.encode('utf-8')
+        self.token_expiry_hours = token_expiry_hours
+        self.token_length = 32  # Longitud del token aleatorio
+    
+    def _generate_random_token(self) -> str:
+        """Genera un token aleatorio criptográficamente seguro."""
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(self.token_length))
+    
+    def _create_signature(self, data: str) -> str:
+        """Crea un HMAC-SHA256 signature para los datos."""
+        return hmac.new(self.secret_key, data.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    def _verify_signature(self, data: str, signature: str) -> bool:
+        """Verifica la firma HMAC de los datos."""
+        expected_signature = self._create_signature(data)
+        return hmac.compare_digest(expected_signature, signature)
+    
+    def generate_token(self, user_id: str) -> str:
+        """
+        Genera un token seguro para restablecer la contraseña.
+        
+        Args:
+            user_id: Identificador único del usuario
+            
+        Returns:
+            Token codificado en base64 seguro para restablecimiento de contraseña
+        """
+        # Validación de entrada
+        if not user_id or not isinstance(user_id, str):
+            raise ValueError("El user_id debe ser una cadena no vacía")
+        
+        # Generar componentes del token
+        random_component = self._generate_random_token()
+        timestamp = int(time.time())
+        expiry_time = timestamp + (self.token_expiry_hours * 3600)
+        
+        # Crear estructura de datos del token
+        token_data = {
+            'user_id': user_id,
+            'random': random_component,
+            'expiry': expiry_time,
+            'timestamp': timestamp
+        }
+        
+        # Convertir a JSON y codificar en base64
+        json_data = json.dumps(token_data, separators=(',', ':'))  # Compact JSON
+        encoded_data = base64.urlsafe_b64encode(json_data.encode('utf-8')).decode('utf-8')
+        
+        # Crear firma
+        signature = self._create_signature(encoded_data)
+        
+        # Combinar datos y firma
+        token = f"{encoded_data}.{signature}"
+        
+        return token
+    
+    def validate_token(self, token: str) -> TokenValidationResult:
+        """
+        Valida un token de restablecimiento de contraseña.
+        
+        Args:
+            token: Token a validar
+            
+        Returns:
+            TokenValidationResult con el resultado de la validación
+        """
+        # Validación básica del token
+        if not token or not isinstance(token, str):
+            return TokenValidationResult(
+                is_valid=False,
+                error="Token inválido o vacío"
+            )
+        
+        # Separar datos y firma
+        parts = token.split('.')
+        if len(parts) != 2:
+            return TokenValidationResult(
+                is_valid=False,
+                error="Formato de token inválido"
+            )
+        
+        encoded_data, signature = parts
+        
+        # Verificar firma
+        if not self._verify_signature(encoded_data, signature):
+            return TokenValidationResult(
+                is_valid=False,
+                error="Firma del token inválida"
+            )
+        
+        try:
+            # Decodificar datos
+            json_data = base64.urlsafe_b64decode(encoded_data.encode('utf-8')).decode('utf-8')
+            token_data = json.loads(json_data)
+            
+            # Validar estructura de datos
+            required_fields = {'user_id', 'random', 'expiry', 'timestamp'}
+            if not all(field in token_data for field in required_fields):
+                return TokenValidationResult(
+                    is_valid=False,
+                    error="Estructura de token inválida"
+                )
+            
+            user_id = token_data['user_id']
+            expiry_time = token_data['expiry']
+            timestamp = token_data['timestamp']
+            
+            # Validar tipos de datos
+            if not isinstance(user_id, str) or not user_id:
+                return TokenValidationResult(
+                    is_valid=False,
+                    error="User ID inválido en el token"
+                )
+            
+            # Verificar expiración
+            current_time = int(time.time())
+            if current_time > expiry_time:
+                return TokenValidationResult(
+                    is_valid=False,
+                    user_id=user_id,
+                    error="Token expirado"
+                )
+            
+            # Verificar que el timestamp no sea en el futuro (tolerancia de 5 minutos)
+            if timestamp > current_time + 300:
+                return TokenValidationResult(
+                    is_valid=False,
+                    user_id=user_id,
+                    error="Timestamp del token inválido"
+                )
+            
+            # Verificar que el token no sea demasiado antiguo (más de 30 días)
+            if timestamp < current_time - (30 * 24 * 3600):
+                return TokenValidationResult(
+                    is_valid=False,
+                    user_id=user_id,
+                    error="Token demasiado antiguo"
+                )
+            
+            # Token válido
+            return TokenValidationResult(
+                is_valid=True,
+                user_id=user_id
+            )
+            
+        except (base64.binascii.Error, json.JSONDecodeError, ValueError) as e:
+            return TokenValidationResult(
+                is_valid=False,
+                error=f"Error al procesar el token: {str(e)}"
+            )
+    
+    def invalidate_token(self, token: str) -> bool:
+        """
+        Invalida un token específico (para implementaciones con lista negra).
+        Esta es una implementación básica que debería extenderse según las necesidades.
+        
+        Args:
+            token: Token a invalidar
+            
+        Returns:
+            True si el token fue invalidado exitosamente
+        """
+        # En una implementación real, aquí se agregaría el token a una lista negra
+        # en una base de datos o caché distribuida
+        # Esta es solo una implementación de ejemplo
+        return True
+
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configuración (en producción, la clave secreta debe venir de variables de entorno)
+    SECRET_KEY = secrets.token_urlsafe(64)  # Generar una clave segura
+    token_manager = PasswordResetTokenManager(SECRET_KEY, token_expiry_hours=1)
+    
+    # Ejemplo: Generar token
+    user_id = "usuario_123"
+    try:
+        token = token_manager.generate_token(user_id)
+        print(f"Token generado: {token[:50]}...")
+        
+        # Ejemplo: Validar token
+        validation_result = token_manager.validate_token(token)
+        
+        if validation_result.is_valid:
+            print(f"Token válido para el usuario: {validation_result.user_id}")
+        else:
+            print(f"Token inválido: {validation_result.error}")
+        
+        # Ejemplo: Token inválido
+        invalid_token = "token.invalido"
+        invalid_result = token_manager.validate_token(invalid_token)
+        print(f"Token inválido test: {invalid_result.error}")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+```

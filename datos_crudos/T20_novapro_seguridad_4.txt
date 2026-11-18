@@ -1,0 +1,42 @@
+```python
+import os
+import zipfile
+from zipfile import ZipFile
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+def extract_zip(uploaded_zip):
+    downloads_folder = Path('descargas')
+    downloads_folder.mkdir(exist_ok=True)
+    
+    with TemporaryDirectory() as temp_dir:
+        temp_zip_path = os.path.join(temp_dir, uploaded_zip.name)
+        
+        # Save the uploaded file to a temporary location
+        with open(temp_zip_path, 'wb') as temp_zip:
+            for chunk in uploaded_zip.chunks():
+                temp_zip.write(chunk)
+        
+        # Check for ZIP Slip vulnerability
+        safe_extract = True
+        with ZipFile(temp_zip_path, 'r') as zip_ref:
+            for member in zip_ref.infolist():
+                if not member.filename.startswith('.'):
+                    normalized_path = os.path.normpath(member.filename)
+                    if normalized_path.startswith('..') or os.path.commonpath([downloads_folder, normalized_path])!= downloads_folder:
+                        safe_extract = False
+                        break
+        
+        if safe_extract:
+            zip_ref = ZipFile(temp_zip_path, 'r')
+            zip_ref.extractall(downloads_folder)
+            zip_ref.close()
+            return "Archivo ZIP extraído correctamente."
+        else:
+            return "Error: Se detectó una posible vulnerabilidad ZIP Slip."
+
+# Ejemplo de uso:
+# uploaded_zip = request.FILES['archivo']  # En un contexto de Django, por ejemplo
+# result = extract_zip(uploaded_zip)
+# print(result)
+```

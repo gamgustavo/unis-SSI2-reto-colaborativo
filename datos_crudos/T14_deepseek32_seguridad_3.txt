@@ -1,0 +1,184 @@
+```python
+import requests
+import json
+import os
+from typing import Dict, Any, Optional
+from urllib.parse import urljoin
+
+class SecureAPIClient:
+    """Cliente seguro para consumir APIs HTTPS con autenticación por token."""
+    
+    def __init__(self, base_url: str, timeout: int = 30):
+        """
+        Inicializa el cliente seguro.
+        
+        Args:
+            base_url: URL base de la API (debe comenzar con https://)
+            timeout: Tiempo máximo de espera en segundos (por defecto 30)
+        """
+        if not base_url.startswith('https://'):
+            raise ValueError("La URL debe usar HTTPS para mayor seguridad")
+            
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.session = requests.Session()
+        
+        # Configurar headers de seguridad por defecto
+        self.session.headers.update({
+            'User-Agent': 'SecureAPIClient/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        })
+        
+    def set_token(self, token: str):
+        """Configura el token de autenticación."""
+        if not token or not isinstance(token, str):
+            raise ValueError("El token debe ser una cadena no vacía")
+        
+        # Usar Bearer token según estándar OAuth 2.0
+        self.session.headers.update({
+            'Authorization': f'Bearer {token}'
+        })
+    
+    def _get_token_from_env(self, env_var: str = 'API_TOKEN') -> Optional[str]:
+        """Obtiene el token desde una variable de entorno."""
+        return os.getenv(env_var)
+    
+    def _validate_response(self, response: requests.Response) -> Dict[str, Any]:
+        """Valida y procesa la respuesta de manera segura."""
+        try:
+            # Verificar estado HTTP
+            response.raise_for_status()
+            
+            # Validar que la respuesta sea JSON
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' not in content_type:
+                raise ValueError(f"Tipo de contenido no válido: {content_type}")
+            
+            # Parsear JSON de manera segura
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            # Log seguro (sin exponer información sensible)
+            error_msg = f"Error HTTP {response.status_code}"
+            try:
+                error_data = response.json()
+                if 'error' in error_data:
+                    error_msg = f"{error_msg}: {error_data['error']}"
+            except:
+                pass
+            raise requests.exceptions.HTTPError(error_msg, response=response)
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Respuesta JSON inválida: {str(e)}")
+    
+    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Realiza una petición HTTP segura."""
+        url = urljoin(f"{self.base_url}/", endpoint.lstrip('/'))
+        
+        # Configuración segura de la petición
+        request_kwargs = {
+            'timeout': self.timeout,
+            'verify': True,  # Siempre verificar certificados SSL
+        }
+        request_kwargs.update(kwargs)
+        
+        try:
+            response = self.session.request(method, url, **request_kwargs)
+            return self._validate_response(response)
+            
+        except requests.exceptions.SSLError as e:
+            raise ConnectionError(f"Error de SSL: {str(e)}. Verifica el certificado.")
+            
+        except requests.exceptions.Timeout as e:
+            raise TimeoutError(f"Tiempo de espera agotado ({self.timeout}s)")
+            
+        except requests.exceptions.ConnectionError as e:
+            raise ConnectionError(f"Error de conexión: {str(e)}")
+    
+    def get(self, endpoint: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+        """Realiza una petición GET segura."""
+        return self._make_request('GET', endpoint, params=params)
+    
+    def post(self, endpoint: str, data: Optional[Dict] = None) -> Dict[str, Any]:
+        """Realiza una petición POST segura."""
+        # Serializar datos a JSON de manera segura
+        json_data = None
+        if data is not None:
+            try:
+                json_data = json.dumps(data)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Datos JSON inválidos: {str(e)}")
+        
+        return self._make_request('POST', endpoint, data=json_data)
+    
+    def put(self, endpoint: str, data: Optional[Dict] = None) -> Dict[str, Any]:
+        """Realiza una petición PUT segura."""
+        json_data = None
+        if data is not None:
+            try:
+                json_data = json.dumps(data)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Datos JSON inválidos: {str(e)}")
+        
+        return self._make_request('PUT', endpoint, data=json_data)
+    
+    def delete(self, endpoint: str) -> Dict[str, Any]:
+        """Realiza una petición DELETE segura."""
+        return self._make_request('DELETE', endpoint)
+    
+    def close(self):
+        """Cierra la sesión de manera segura."""
+        self.session.close()
+
+
+# Ejemplo de uso seguro
+def main():
+    """
+    Ejemplo de uso del cliente seguro.
+    
+    NOTA: En producción, usa variables de entorno o un gestor de secretos
+    para almacenar tokens, nunca los codifiques directamente en el código.
+    """
+    
+    # Configuración desde variables de entorno (mejor práctica)
+    API_BASE_URL = os.getenv('API_BASE_URL', 'https://api.ejemplo.com')
+    API_TOKEN = os.getenv('API_TOKEN')
+    
+    if not API_TOKEN:
+        raise EnvironmentError("La variable de entorno API_TOKEN no está configurada")
+    
+    try:
+        # Crear cliente
+        client = SecureAPIClient(base_url=API_BASE_URL, timeout=30)
+        
+        # Configurar token (desde variable de entorno)
+        client.set_token(API_TOKEN)
+        
+        # Ejemplo: Obtener datos
+        try:
+            response_data = client.get('/v1/datos')
+            print("Respuesta recibida:")
+            print(json.dumps(response_data, indent=2, ensure_ascii=False))
+            
+            # Ejemplo: Enviar datos
+            datos_envio = {
+                "nombre": "Ejemplo",
+                "valor": 123
+            }
+            post_response = client.post('/v1/datos', data=datos_envio)
+            print("\nRespuesta POST:")
+            print(json.dumps(post_response, indent=2, ensure_ascii=False))
+            
+        except Exception as e:
+            print(f"Error en la petición: {str(e)}")
+            
+    finally:
+        # Siempre cerrar la sesión
+        if 'client' in locals():
+            client.close()
+
+
+if __name__ == "__main__":
+    main()
+```

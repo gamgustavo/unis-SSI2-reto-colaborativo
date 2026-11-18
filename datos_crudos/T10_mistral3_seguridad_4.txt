@@ -1,0 +1,222 @@
+```python
+from flask import Flask, request, jsonify, abort
+import requests
+from urllib.parse import urlparse
+import re
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Configuración segura
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800,
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 16MB max
+    JSONIFY_PRETTYPRINT_REGULAR=False
+)
+
+# Lista de dominios permitidos (ajusta según tus necesidades)
+ALLOWED_DOMAINS = {
+    'example.com',
+    'api.example.com',
+    'trusted-site.org'
+}
+
+# Lista de User-Agents permitidos
+ALLOWED_USER_AGENTS = {
+    'Mozilla/5.0',
+    'curl/',
+    'PostmanRuntime/'
+}
+
+# Lista de Content-Types permitidos para la respuesta
+ALLOWED_CONTENT_TYPES = {
+    'text/html',
+    'application/json',
+    'text/plain',
+    'application/xml',
+    'text/xml'
+}
+
+def is_valid_url(url):
+    """Validar la estructura de la URL"""
+    try:
+        result = urlparse(url)
+        if not all([result.scheme, result.netloc]):
+            return False
+        if result.scheme not in ['http', 'https']:
+            return False
+        if not re.match(r'^[a-zA-Z0-9.-]+$', result.netloc):
+            return False
+        return True
+    except:
+        return False
+
+def is_allowed_domain(url):
+    """Verificar si el dominio está en la lista permitida"""
+    try:
+        domain = urlparse(url).netloc.lower()
+        # Eliminar www. si existe
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain in ALLOWED_DOMAINS
+    except:
+        return False
+
+def sanitize_url(url):
+    """Sanitizar la URL para evitar inyecciones"""
+    if not is_valid_url(url):
+        return None
+
+    # Eliminar caracteres peligrosos
+    sanitized = re.sub(r'[\r\n\t]', '', url)
+    sanitized = re.sub(r'[<>"\'\`{}|\\^~\[\]]', '', sanitized)
+
+    return sanitized
+
+def validate_user_agent(user_agent):
+    """Validar el User-Agent"""
+    if not user_agent:
+        return False
+    return any(ua in user_agent for ua in ALLOWED_USER_AGENTS)
+
+@app.route('/api/fetch', methods=['GET'])
+def fetch_url_content():
+    # Validar Content-Type y Accept headers
+    if (request.headers.get('Content-Type') and
+        'application/json' not in request.headers['Content-Type']):
+        abort(415, description="Unsupported Media Type")
+
+    if (request.headers.get('Accept') and
+        not any(ct in request.headers['Accept'] for ct in ['application/json', '*/*'])):
+        abort(406, description="Not Acceptable")
+
+    # Validar User-Agent
+    user_agent = request.headers.get('User-Agent', '')
+    if not validate_user_agent(user_agent):
+        abort(403, description="Forbidden: Invalid User-Agent")
+
+    # Obtener y validar la URL
+    url = request.args.get('url')
+    if not url:
+        abort(400, description="URL parameter is required")
+
+    # Sanitizar y validar la URL
+    sanitized_url = sanitize_url(url)
+    if not sanitized_url:
+        abort(400, description="Invalid URL format")
+
+    if not is_allowed_domain(sanitized_url):
+        abort(403, description="Domain not allowed")
+
+    try:
+        # Configuración segura para la petición
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; URL-Fetcher/1.0)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'close'
+        }
+
+        # Timeout y límites para evitar ataques DoS
+        response = requests.get(
+            sanitized_url,
+            headers=headers,
+            timeout=10,
+            allow_redirects=False,  # Manejar redirecciones manualmente
+            stream=True  # Para manejar contenido grande
+        )
+
+        # Verificar redirecciones (máximo 3)
+        redirect_count = 0
+        while response.is_redirect and redirect_count < 3:
+            redirect_url = response.headers['Location']
+            if not is_valid_url(redirect_url):
+                abort(400, description="Invalid redirect URL")
+
+            if not is_allowed_domain(redirect_url):
+                abort(403, description="Redirect to unauthorized domain")
+
+            response = requests.get(
+                redirect_url,
+                headers=headers,
+                timeout=10,
+                allow_redirects=False,
+                stream=True
+            )
+            redirect_count += 1
+
+        if redirect_count >= 3:
+            abort(400, description="Too many redirects")
+
+        # Verificar Content-Type de la respuesta
+        content_type = response.headers.get('Content-Type', '').lower()
+        if not any(allowed in content_type for allowed in ALLOWED_CONTENT_TYPES):
+            abort(415, description="Unsupported Content-Type from target URL")
+
+        # Limitar el tamaño de la respuesta
+        max_size = 10 * 1024 * 1024  # 10MB
+        content_length = int(response.headers.get('Content-Length', 0))
+
+        if content_length > max_size:
+            abort(413, description="Response too large")
+
+        # Leer el contenido de forma segura
+        content = b''
+        for chunk in response.iter_content(chunk_size=8192):
+            if len(content) + len(chunk) > max_size:
+                abort(413, description="Response too large")
+            content += chunk
+
+        # Convertir a string si es texto
+        if 'text/' in content_type:
+            try:
+                content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                content = content.decode('latin-1')
+
+        return jsonify({
+            'url': sanitized_url,
+            'status_code': response.status_code,
+            'content_type': content_type,
+            'content': content,
+            'headers': dict(response.headers)
+        })
+
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Error fetching URL {sanitized_url}: {str(e)}")
+        abort(502, description="Error fetching the requested URL")
+    except Exception as e:
+        app.logger.error(f"Unexpected error: {str(e)}")
+        abort(500, description="Internal server error")
+
+@app.errorhandler(400)
+@app.errorhandler(403)
+@app.errorhandler(404)
+@app.errorhandler(405)
+@app.errorhandler(406)
+@app.errorhandler(413)
+@app.errorhandler(415)
+@app.errorhandler(500)
+@app.errorhandler(502)
+def handle_error(e):
+    response = jsonify({
+        'error': str(e.description),
+        'status_code': e.code
+    })
+    response.status_code = e.code
+    return response
+
+if __name__ == '__main__':
+    # Configuración segura para producción
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        ssl_context='adhoc',  # En producción, usa certificados reales
+        threaded=False,  # Para evitar problemas de concurrencia
+        debug=False
+    )
+```

@@ -1,0 +1,17 @@
+import pickle
+from typing import Dict, Any
+
+def reconstruir_sesion(cookie_bytes: bytes) -> Dict[str, Any]:
+    try:
+        sesion = pickle.loads(cookie_bytes)
+        if isinstance(sesion, dict):
+            return sesion
+        else:
+            raise ValueError("La cookie no contiene un objeto de sesión válido.")
+    except pickle.PickleError as e:
+        raise ValueError(f"Error al deserializar la cookie: {e}")
+
+# Ejemplo de uso
+# cookie_bytes = b'...'  # Supongamos que esta es la cookie en bytes
+# sesion_reconstruida = reconstruir_sesion(cookie_bytes)
+# print(sesion_reconstruida)

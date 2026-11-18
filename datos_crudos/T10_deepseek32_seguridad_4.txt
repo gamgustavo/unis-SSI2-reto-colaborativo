@@ -1,0 +1,145 @@
+```python
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+
+app = Flask(__name__)
+
+def is_valid_url(url):
+    """Valida que la URL tenga un formato seguro y permitido"""
+    try:
+        result = urlparse(url)
+        
+        # Validar esquema permitido (solo http y https)
+        if result.scheme not in ('http', 'https'):
+            return False
+            
+        # Validar que tenga netloc (dominio)
+        if not result.netloc:
+            return False
+            
+        # Prevenir SSRF: bloquear direcciones locales/privadas
+        local_hosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '169.254.169.254']
+        if result.hostname in local_hosts:
+            return False
+            
+        # Bloquear rangos de IP privadas
+        if result.hostname:
+            ip_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+            if ip_pattern.match(result.hostname):
+                parts = result.hostname.split('.')
+                # 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                if (parts[0] == '10' or
+                    (parts[0] == '172' and 16 <= int(parts[1]) <= 31) or
+                    (parts[0] == '192' and parts[1] == '168')):
+                    return False
+                    
+        return True
+    except:
+        return False
+
+@app.route('/fetch', methods=['POST'])
+def fetch_url():
+    """
+    Endpoint para obtener contenido de una URL
+    Requiere: JSON con campo 'url'
+    """
+    # Validar que la solicitud sea JSON
+    if not request.is_json:
+        return jsonify({'error': 'Content-Type must be application/json'}), 400
+    
+    data = request.get_json()
+    
+    # Validar que exista el campo 'url'
+    if not data or 'url' not in data:
+        return jsonify({'error': 'Missing "url" field in JSON body'}), 400
+    
+    url = data['url'].strip()
+    
+    # Validar URL
+    if not url:
+        return jsonify({'error': 'URL cannot be empty'}), 400
+    
+    if not is_valid_url(url):
+        return jsonify({'error': 'Invalid or disallowed URL'}), 400
+    
+    try:
+        # Configurar timeout para prevenir DoS
+        timeout = 10  # segundos
+        
+        # Configurar headers para prevenir ser bloqueado como bot simple
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; Flask-Fetcher/1.0)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+        }
+        
+        # Realizar la petición con verificación SSL
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            verify=True,  # Verificar certificados SSL
+            allow_redirects=True,
+            stream=False  # No usar stream para evitar memory exhaustion
+        )
+        
+        # Verificar código de estado
+        response.raise_for_status()
+        
+        # Limitar tamaño de respuesta para prevenir memory exhaustion
+        max_size = 10 * 1024 * 1024  # 10 MB
+        content_length = response.headers.get('Content-Length')
+        
+        if content_length and int(content_length) > max_size:
+            return jsonify({'error': 'Content too large'}), 413
+        
+        # Obtener contenido con límite de tamaño
+        content = response.text
+        
+        if len(content.encode('utf-8')) > max_size:
+            return jsonify({'error': 'Content too large'}), 413
+        
+        # Obtener información de la respuesta
+        result = {
+            'url': response.url,
+            'status_code': response.status_code,
+            'content_type': response.headers.get('Content-Type', ''),
+            'content': content,
+            'headers': dict(response.headers)
+        }
+        
+        return jsonify(result), 200
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Request timeout'}), 408
+    except requests.exceptions.TooManyRedirects:
+        return jsonify({'error': 'Too many redirects'}), 400
+    except requests.exceptions.SSLError:
+        return jsonify({'error': 'SSL verification failed'}), 400
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Connection error'}), 400
+    except requests.exceptions.HTTPError as e:
+        return jsonify({'error': f'HTTP error: {str(e)}'}), e.response.status_code if e.response else 400
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Request failed: {str(e)}'}), 400
+    except Exception as e:
+        # Log interno del error (en producción usar logging)
+        app.logger.error(f'Unexpected error: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Method not allowed'}), 405
+
+if __name__ == '__main__':
+    # En producción, usar un servidor WSGI como Gunicorn
+    # Deshabilitar debug en producción
+    app.run(debug=False, host='0.0.0.0', port=5000)
+```

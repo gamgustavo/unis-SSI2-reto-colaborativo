@@ -1,0 +1,78 @@
+```python
+import re
+
+def calcular_expresion(expresion):
+    """
+    Evalúa una expresión matemática básica con operadores +, -, *, /, ^ y paréntesis.
+    Maneja números enteros y decimales.
+    """
+    # Reemplazar ^ por ** para exponenciación
+    expresion = expresion.replace('^', '**')
+    
+    # Validar caracteres permitidos
+    caracteres_permitidos = re.compile(r'^[0-9+\-*/().\s^]+$')
+    if not caracteres_permitidos.match(expresion):
+        raise ValueError("La expresión contiene caracteres no válidos")
+    
+    # Verificar paréntesis balanceados
+    contador = 0
+    for char in expresion:
+        if char == '(':
+            contador += 1
+        elif char == ')':
+            contador -= 1
+        if contador < 0:
+            raise ValueError("Paréntesis desbalanceados")
+    if contador != 0:
+        raise ValueError("Paréntesis desbalanceados")
+    
+    # Evaluar la expresión de forma segura
+    try:
+        # Usar eval con restricciones de seguridad
+        resultado = eval(expresion, {"__builtins__": {}}, {})
+    except ZeroDivisionError:
+        raise ValueError("Error: División por cero")
+    except SyntaxError:
+        raise ValueError("Error: Expresión con sintaxis incorrecta")
+    except Exception as e:
+        raise ValueError(f"Error al evaluar la expresión: {str(e)}")
+    
+    return resultado
+
+def main():
+    print("Calculadora de Consola")
+    print("Operadores soportados: +, -, *, /, ^ (exponenciación)")
+    print("Puedes usar paréntesis: ( )")
+    print("Escribe 'salir' para terminar")
+    print("-" * 40)
+    
+    while True:
+        try:
+            entrada = input("\nExpresión: ").strip()
+            
+            if entrada.lower() == 'salir':
+                print("¡Hasta luego!")
+                break
+            
+            if not entrada:
+                continue
+            
+            resultado = calcular_expresion(entrada)
+            
+            # Mostrar resultado formateado
+            if isinstance(resultado, float) and resultado.is_integer():
+                resultado = int(resultado)
+            
+            print(f"Resultado: {resultado}")
+            
+        except ValueError as e:
+            print(f"Error: {e}")
+        except KeyboardInterrupt:
+            print("\n\nPrograma interrumpido por el usuario.")
+            break
+        except Exception as e:
+            print(f"Error inesperado: {e}")
+
+if __name__ == "__main__":
+    main()
+```

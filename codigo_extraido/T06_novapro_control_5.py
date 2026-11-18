@@ -1,0 +1,27 @@
+import jwt
+import datetime
+from jwt.exceptions import InvalidTokenError
+
+SECRET_KEY = "your-secret-key"
+ALGORITHM = "HS256"
+TOKEN_EXPIRATION_MINUTES = 30
+
+def generate_reset_token(user_id):
+    expiration_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=TOKEN_EXPIRATION_MINUTES)
+    payload = {
+        'user_id': user_id,
+        'exp': expiration_time
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+def validate_reset_token(token):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get('user_id')
+        if user_id:
+            return user_id
+        else:
+            return None
+    except InvalidTokenError:
+        return None

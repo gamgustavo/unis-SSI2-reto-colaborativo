@@ -1,0 +1,36 @@
+```python
+import psycopg2
+
+def listar_clientes():
+    try:
+        # Establecer la conexión a la base de datos
+        conexion = psycopg2.connect(
+            host="tu_host",
+            database="tu_base_de_datos",
+            user="tu_usuario",
+            password="tu_contraseña"
+        )
+
+        # Crear un cursor para ejecutar consultas
+        cursor = conexion.cursor()
+
+        # Ejecutar la consulta para listar los clientes
+        cursor.execute("SELECT * FROM clientes")
+
+        # Obtener todos los resultados
+        clientes = cursor.fetchall()
+
+        # Imprimir los resultados
+        for cliente in clientes:
+            print(cliente)
+
+        # Cerrar el cursor y la conexión
+        cursor.close()
+        conexion.close()
+
+    except psycopg2.Error as e:
+        print("Ocurrió un error al conectar a PostgreSQL: ", e)
+
+# Llamar a la función para listar los clientes
+listar_clientes()
+```

@@ -1,0 +1,46 @@
+```python
+from flask import Flask, request, redirect, url_for, flash, render_template, session
+from werkzeug.security import check_password_hash
+import re
+
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'  # Cambia esto por una clave secreta segura
+
+# Simulación de base de datos de usuarios
+users_db = {
+    'user1': {'password': '$2b$12$N0Lq5S9Qr5.2h3t3vNvSGO99pP5Y5X7X.7X7X7X7X7X7X7X7X7X7X'},  # contraseña: password1
+    'user2': {'password': '$2b$12$N0Lq5S9Qr5.2h3t3vNvSGO99pP5Y5X7X.7X7X7X7X7X7X7X7X7X7X'},  # contraseña: password2
+}
+
+def is_safe_url(target):
+    return all([x in target for x in ['http://', 'https://', request.host]])
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        next_url = request.args.get('next')
+
+        if username in users_db and check_password_hash(users_db[username]['password'], password):
+            session['username'] = username
+            if next_url and is_safe_url(next_url):
+                return redirect(next_url)
+            else:
+                return redirect(url_for('index'))
+        else:
+            flash('Credenciales inválidas', 'error')
+            return render_template('login.html')
+
+    next_url = request.args.get('next')
+    return render_template('login.html', next_url=next_url)
+
+@app.route('/')
+def index():
+    if 'username' in session:
+        return f'Bienvenido, {session["username"]}!'
+    return redirect(url_for('login'))
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```

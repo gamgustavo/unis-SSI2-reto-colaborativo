@@ -1,0 +1,81 @@
+```python
+import sqlite3
+from hashlib import sha256
+from getpass import getpass
+
+def inicializar_base_de_datos():
+    """Inicializa la base de datos SQLite con una tabla para usuarios."""
+    conn = sqlite3.connect('usuarios.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre_usuario TEXT UNIQUE NOT NULL,
+            contrasena_hash TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def hash_contrasena(contrasena):
+    """Genera un hash SHA-256 de la contraseña."""
+    return sha256(contrasena.encode()).hexdigest()
+
+def registrar_usuario(nombre_usuario, contrasena):
+    """Registra un nuevo usuario en la base de datos."""
+    try:
+        conn = sqlite3.connect('usuarios.db')
+        cursor = conn.cursor()
+        contrasena_hash = hash_contrasena(contrasena)
+        cursor.execute('INSERT INTO usuarios (nombre_usuario, contrasena_hash) VALUES (?, ?)',
+                      (nombre_usuario, contrasena_hash))
+        conn.commit()
+        print(f"Usuario '{nombre_usuario}' registrado con éxito.")
+    except sqlite3.IntegrityError:
+        print(f"Error: El usuario '{nombre_usuario}' ya existe.")
+    finally:
+        conn.close()
+
+def verificar_contrasena(nombre_usuario, contrasena):
+    """Verifica si la contraseña proporcionada coincide con la almacenada."""
+    conn = sqlite3.connect('usuarios.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT contrasena_hash FROM usuarios WHERE nombre_usuario = ?', (nombre_usuario,))
+    resultado = cursor.fetchone()
+    conn.close()
+
+    if resultado:
+        contrasena_hash_almacenada = resultado[0]
+        contrasena_hash_proporcionada = hash_contrasena(contrasena)
+        return contrasena_hash_proporcionada == contrasena_hash_almacenada
+    return False
+
+def main():
+    """Función principal para interactuar con el usuario."""
+    inicializar_base_de_datos()
+
+    while True:
+        print("\n1. Registrar usuario")
+        print("2. Verificar contraseña")
+        print("3. Salir")
+        opcion = input("Seleccione una opción: ")
+
+        if opcion == '1':
+            nombre_usuario = input("Nombre de usuario: ")
+            contrasena = getpass("Contraseña: ")
+            registrar_usuario(nombre_usuario, contrasena)
+        elif opcion == '2':
+            nombre_usuario = input("Nombre de usuario: ")
+            contrasena = getpass("Contraseña: ")
+            if verificar_contrasena(nombre_usuario, contrasena):
+                print("Contraseña correcta.")
+            else:
+                print("Nombre de usuario o contraseña incorrectos.")
+        elif opcion == '3':
+            break
+        else:
+            print("Opción no válida.")
+
+if __name__ == "__main__":
+    main()
+```

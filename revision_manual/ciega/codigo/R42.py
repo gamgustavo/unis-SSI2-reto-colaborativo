@@ -1,0 +1,73 @@
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+
+app = Flask(__name__)
+
+def is_valid_url(url):
+    """Valida que la URL tenga un formato correcto"""
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
+
+@app.route('/fetch-url', methods=['POST'])
+def fetch_url():
+    """
+    Endpoint que recibe una URL y devuelve su contenido
+    Ejemplo de solicitud POST:
+    {
+        "url": "https://ejemplo.com"
+    }
+    """
+    try:
+        # Obtener datos de la solicitud
+        data = request.get_json()
+        
+        if not data or 'url' not in data:
+            return jsonify({
+                'error': 'Se requiere el campo "url" en el cuerpo de la solicitud'
+            }), 400
+        
+        url = data['url']
+        
+        # Validar URL
+        if not is_valid_url(url):
+            return jsonify({
+                'error': 'URL no válida'
+            }), 400
+        
+        # Descargar contenido de la URL
+        response = requests.get(
+            url, 
+            timeout=10,
+            headers={'User-Agent': 'Mozilla/5.0 (compatible; Flask-URL-Fetcher/1.0)'}
+        )
+        
+        # Verificar si la solicitud fue exitosa
+        response.raise_for_status()
+        
+        # Devolver el contenido
+        return jsonify({
+            'url': url,
+            'status_code': response.status_code,
+            'content': response.text,
+            'content_type': response.headers.get('Content-Type', '')
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'error': 'Timeout al intentar acceder a la URL'
+        }), 408
+    except requests.exceptions.RequestException as e:
+        return jsonify({
+            'error': f'Error al descargar la URL: {str(e)}'
+        }), 400
+    except Exception as e:
+        return jsonify({
+            'error': f'Error interno del servidor: {str(e)}'
+        }), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

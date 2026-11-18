@@ -1,0 +1,58 @@
+```python
+from flask import Flask, request, render_template_string
+from flask_wtf import FlaskForm
+from wtforms import StringField
+from wtforms.validators import DataRequired
+from wtforms.widgets import TextArea
+from werkzeug.security import safe_str_cmp
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'una_clave_secreta_muy_segura'
+
+class ComentarioForm(FlaskForm):
+    comentario = StringField('Comentario', validators=[DataRequired()], widget=TextArea())
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    form = ComentarioForm()
+    comentario = None
+    
+    if form.validate_on_submit():
+        comentario = form.comentario.data
+        
+        # Validación adicional para evitar inyección de código malicioso
+        if any(safe_str_cmp(comentario.encode(), script.encode()) for script in ["<script>", "</script>"]):
+            return "Comentario no válido", 400
+        
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Comentario</title>
+        </head>
+        <body>
+            <h1>Deja tu comentario</h1>
+            <form method="post">
+                {{ form.hidden_tag() }}
+                {{ form.comentario.label }}<br>
+                {{ form.comentario(size=30) }}<br>
+                <input type="submit" value="Enviar">
+            </form>
+            {% if comentario %}
+                <h2>Tu comentario:</h2>
+                <p>{{ comentario|safe }}</p>
+            {% endif %}
+        </body>
+        </html>
+    ''', form=form, comentario=comentario)
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+En este código:
+1. Se utiliza WTForms para manejar la validación del formulario.
+2. Se aplica una validación adicional para evitar la inyección de scripts maliciosos.
+3. Se utiliza `safe_str_cmp` de `werkzeug.security` para comparar cadenas de manera segura.
+4. Se utiliza `|safe` en Jinja2 para asegurar que el comentario se renderice como HTML sin ser escapado, pero teniendo en cuenta que ya se validó para evitar inyecciones.

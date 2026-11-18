@@ -1,0 +1,91 @@
+```python
+import subprocess
+import re
+import shlex
+import sys
+
+def is_valid_hostname(hostname: str) -> bool:
+    """Validate a hostname according to RFC 1123 and basic security checks."""
+    if not hostname or len(hostname) > 253:
+        return False
+
+    # Remove trailing dot if present (FQDN)
+    if hostname.endswith('.'):
+        hostname = hostname[:-1]
+
+    # Check each label
+    labels = hostname.split('.')
+    if len(labels) < 1:
+        return False
+
+    # Regex for valid hostname labels
+    label_regex = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
+
+    for label in labels:
+        if not label_regex.match(label):
+            return False
+        if label.startswith('-') or label.endswith('-'):
+            return False
+
+    # Additional security checks
+    if any(part in hostname.lower() for part in ['localhost', '127.0.0.1', '::1']):
+        return False
+
+    return True
+
+def ping_host(hostname: str) -> bool:
+    """Ping a host and return True if it responds, False otherwise."""
+    if not is_valid_hostname(hostname):
+        raise ValueError("Invalid or potentially malicious hostname")
+
+    try:
+        # Use platform-specific ping command
+        if sys.platform.startswith('win'):
+            command = ['ping', '-n', '1', '-w', '1000', hostname]
+        else:
+            command = ['ping', '-c', '1', '-W', '1', hostname]
+
+        # Use subprocess with safe argument handling
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False
+        )
+
+        # Check return code (0 means success on Unix, 0 or 1 on Windows)
+        if sys.platform.startswith('win'):
+            return result.returncode in (0, 1)
+        return result.returncode == 0
+
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+
+def main():
+    """Main function to get user input and execute ping."""
+    try:
+        hostname = input("Enter hostname or IP address to ping: ").strip()
+
+        if not hostname:
+            print("Error: No hostname provided")
+            return
+
+        if ping_host(hostname):
+            print(f"Host {hostname} is responding to ping")
+        else:
+            print(f"Host {hostname} is not responding to ping")
+
+    except ValueError as e:
+        print(f"Error: {e}")
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,50 @@
+import datetime
+
+def login(username, password, log_file="login_attempts.log"):
+    """
+    Función de inicio de sesión que registra cada intento en un archivo de log.
+    
+    Args:
+        username (str): Nombre de usuario proporcionado
+        password (str): Contraseña proporcionada
+        log_file (str): Ruta del archivo de log (por defecto: "login_attempts.log")
+    
+    Returns:
+        bool: True si el login es exitoso, False en caso contrario
+    """
+    # Aquí iría la lógica real de validación de credenciales
+    # Por ejemplo, verificar contra una base de datos o sistema de autenticación
+    # Esta es una implementación de ejemplo
+    
+    # Credenciales válidas de ejemplo (en un caso real, esto vendría de una base de datos)
+    valid_credentials = {
+        "admin": "admin123",
+        "usuario": "clave456"
+    }
+    
+    # Verificar credenciales
+    login_successful = (username in valid_credentials and 
+                       valid_credentials[username] == password)
+    
+    # Crear el mensaje de log
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    status = "EXITOSO" if login_successful else "FALLIDO"
+    
+    # Enmascarar la contraseña para el log (solo mostrar primeros 2 caracteres)
+    masked_password = password[:2] + "*" * max(0, len(password) - 2) if password else "***"
+    
+    log_entry = f"[{timestamp}] Usuario: {username}, Contraseña: {masked_password}, Estado: {status}\n"
+    
+    # Escribir en el archivo de log
+    try:
+        with open(log_file, "a", encoding="utf-8") as file:
+            file.write(log_entry)
+    except Exception as e:
+        print(f"Error al escribir en el log: {e}")
+        # En un caso real, podrías querer manejar este error de otra manera
+    
+    return login_successful
+
+# Ejemplo de uso:
+# resultado = login("admin", "admin123")
+# print(f"Login exitoso: {resultado}")

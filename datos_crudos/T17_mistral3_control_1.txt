@@ -1,0 +1,40 @@
+```python
+import re
+
+def calcular_expresion(expresion):
+    try:
+        # Reemplazar posibles caracteres no permitidos
+        expresion = re.sub(r'[^0-9+\-*/().%^ ]', '', expresion)
+
+        # Evaluar la expresión de forma segura
+        resultado = eval(expresion, {'__builtins__': None}, {})
+
+        # Manejar división por cero
+        if isinstance(resultado, complex):
+            return "Error: División por cero o operación no válida"
+        return resultado
+    except ZeroDivisionError:
+        return "Error: División por cero"
+    except Exception as e:
+        return f"Error: Expresión no válida ({str(e)})"
+
+def main():
+    print("Calculadora en consola")
+    print("Ingresa una expresión matemática (ej: 2+3*4) o 'salir' para terminar")
+
+    while True:
+        expresion = input("\n> ").strip()
+
+        if expresion.lower() == 'salir':
+            print("Saliendo de la calculadora...")
+            break
+
+        if not expresion:
+            continue
+
+        resultado = calcular_expresion(expresion)
+        print(f"Resultado: {resultado}")
+
+if __name__ == "__main__":
+    main()
+```

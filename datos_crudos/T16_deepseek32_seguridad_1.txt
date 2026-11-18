@@ -1,0 +1,331 @@
+```python
+import os
+import time
+import secrets
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+import jwt
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
+
+class JWTManager:
+    def __init__(self):
+        # En producción, usa una clave secreta fuerte almacenada de forma segura
+        # No hardcodear en el código. Usa variables de entorno o un sistema de gestión de secretos
+        self.secret_key = os.environ.get("JWT_SECRET_KEY")
+        if not self.secret_key:
+            # Solo para desarrollo - en producción esto debe fallar explícitamente
+            self.secret_key = secrets.token_urlsafe(64)
+            print("ADVERTENCIA: Usando clave temporal. Configura JWT_SECRET_KEY en producción.")
+        
+        # Algoritmo recomendado por OWASP
+        self.algorithm = "HS256"
+        
+        # Tiempo de expiración del token de acceso (15 minutos por defecto)
+        self.access_token_expire_minutes = 15
+        
+        # Tiempo de expiración del token de refresco (7 días por defecto)
+        self.refresh_token_expire_days = 7
+        
+        # Lista negra para tokens revocados (en producción usar Redis/DB)
+        self.token_blacklist = set()
+    
+    def create_access_token(
+        self, 
+        user_id: str, 
+        username: str, 
+        additional_claims: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Crea un token JWT de acceso seguro.
+        
+        Args:
+            user_id: Identificador único del usuario
+            username: Nombre de usuario
+            additional_claims: Claims adicionales para incluir en el token
+            
+        Returns:
+            Token JWT firmado
+        """
+        # Claims estándar recomendados por RFC 7519
+        now = datetime.utcnow()
+        expire = now + timedelta(minutes=self.access_token_expire_minutes)
+        
+        payload = {
+            "sub": user_id,  # Subject - identificador del sujeto
+            "username": username,
+            "iat": int(now.timestamp()),  # Issued at - tiempo de emisión
+            "exp": int(expire.timestamp()),  # Expiration time - tiempo de expiración
+            "nbf": int(now.timestamp()),  # Not before - no válido antes de
+            "jti": secrets.token_urlsafe(16),  # JWT ID - identificador único
+            "type": "access"  # Tipo de token
+        }
+        
+        # Agregar claims adicionales si se proporcionan
+        if additional_claims:
+            # Filtrar claims reservados para evitar conflictos
+            reserved_claims = {"sub", "iat", "exp", "nbf", "jti", "type"}
+            for key, value in additional_claims.items():
+                if key not in reserved_claims:
+                    payload[key] = value
+        
+        # Generar token firmado
+        token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+        
+        return token
+    
+    def create_refresh_token(self, user_id: str) -> str:
+        """
+        Crea un token de refresco seguro.
+        
+        Args:
+            user_id: Identificador único del usuario
+            
+        Returns:
+            Token de refresco JWT firmado
+        """
+        now = datetime.utcnow()
+        expire = now + timedelta(days=self.refresh_token_expire_days)
+        
+        payload = {
+            "sub": user_id,
+            "iat": int(now.timestamp()),
+            "exp": int(expire.timestamp()),
+            "jti": secrets.token_urlsafe(16),
+            "type": "refresh"  # Tipo de token
+        }
+        
+        token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+        
+        return token
+    
+    def verify_token(self, token: str, token_type: str = "access") -> Dict[str, Any]:
+        """
+        Verifica y decodifica un token JWT.
+        
+        Args:
+            token: Token JWT a verificar
+            token_type: Tipo de token esperado ("access" o "refresh")
+            
+        Returns:
+            Payload decodificado si el token es válido
+            
+        Raises:
+            InvalidTokenError: Si el token es inválido, expirado o revocado
+        """
+        try:
+            # Verificar si el token está en la lista negra
+            if self.is_token_revoked(token):
+                raise InvalidTokenError("Token revocado")
+            
+            # Decodificar y verificar el token
+            payload = jwt.decode(
+                token, 
+                self.secret_key, 
+                algorithms=[self.algorithm],
+                options={
+                    "require": ["exp", "iat", "sub"],  # Requerir claims específicos
+                    "verify_exp": True,  # Verificar expiración
+                    "verify_iat": True,  # Verificar tiempo de emisión
+                    "verify_nbf": True   # Verificar "not before"
+                }
+            )
+            
+            # Verificar el tipo de token
+            if payload.get("type") != token_type:
+                raise InvalidTokenError(f"Tipo de token inválido. Esperado: {token_type}")
+            
+            # Verificar que el token no sea demasiado viejo (opcional)
+            max_age = timedelta(days=30)  # Máximo 30 días de antigüedad
+            iat_time = datetime.fromtimestamp(payload["iat"])
+            if datetime.utcnow() - iat_time > max_age:
+                raise InvalidTokenError("Token demasiado antiguo")
+            
+            return payload
+            
+        except ExpiredSignatureError:
+            raise InvalidTokenError("Token expirado")
+        except jwt.InvalidSignatureError:
+            raise InvalidTokenError("Firma inválida")
+        except jwt.DecodeError:
+            raise InvalidTokenError("Token malformado")
+        except Exception as e:
+            # Loggear el error para monitoreo pero no exponer detalles internos
+            print(f"Error verificando token: {type(e).__name__}")
+            raise InvalidTokenError("Token inválido")
+    
+    def revoke_token(self, token: str) -> None:
+        """
+        Revoca un token agregándolo a la lista negra.
+        
+        Args:
+            token: Token a revocar
+        """
+        try:
+            # Extraer el jti del token sin verificar completamente
+            # (esto es seguro porque solo estamos extrayendo el ID para la lista negra)
+            unverified_payload = jwt.decode(token, options={"verify_signature": False})
+            jti = unverified_payload.get("jti")
+            if jti:
+                self.token_blacklist.add(jti)
+        except:
+            pass  # Si no podemos extraer el jti, no podemos agregarlo a la lista negra
+    
+    def is_token_revoked(self, token: str) -> bool:
+        """
+        Verifica si un token ha sido revocado.
+        
+        Args:
+            token: Token a verificar
+            
+        Returns:
+            True si el token está revocado, False en caso contrario
+        """
+        try:
+            unverified_payload = jwt.decode(token, options={"verify_signature": False})
+            jti = unverified_payload.get("jti")
+            return jti in self.token_blacklist if jti else False
+        except:
+            return False
+    
+    def refresh_access_token(self, refresh_token: str) -> str:
+        """
+        Crea un nuevo token de acceso usando un token de refresco válido.
+        
+        Args:
+            refresh_token: Token de refresco válido
+            
+        Returns:
+            Nuevo token de acceso
+            
+        Raises:
+            InvalidTokenError: Si el token de refresco es inválido
+        """
+        try:
+            # Verificar el token de refresco
+            payload = self.verify_token(refresh_token, "refresh")
+            
+            # Revocar el token de refresco usado (one-time use)
+            self.revoke_token(refresh_token)
+            
+            # Crear nuevo token de acceso
+            user_id = payload["sub"]
+            username = payload.get("username", "")
+            
+            # Crear nuevo token de acceso
+            new_access_token = self.create_access_token(user_id, username)
+            
+            # Crear nuevo token de refresco
+            new_refresh_token = self.create_refresh_token(user_id)
+            
+            return {
+                "access_token": new_access_token,
+                "refresh_token": new_refresh_token,
+                "token_type": "bearer"
+            }
+            
+        except InvalidTokenError:
+            raise
+        except Exception as e:
+            print(f"Error refrescando token: {type(e).__name__}")
+            raise InvalidTokenError("No se pudo refrescar el token")
+
+
+# Ejemplo de uso seguro
+def example_usage():
+    """
+    Ejemplo de cómo usar el JWTManager de forma segura.
+    """
+    # Inicializar el manager
+    jwt_manager = JWTManager()
+    
+    # Crear tokens para un usuario
+    user_id = "user123"
+    username = "john_doe"
+    
+    try:
+        # Crear token de acceso
+        access_token = jwt_manager.create_access_token(
+            user_id=user_id,
+            username=username,
+            additional_claims={"role": "admin", "email": "john@example.com"}
+        )
+        
+        print(f"Token de acceso creado: {access_token[:50]}...")
+        
+        # Crear token de refresco
+        refresh_token = jwt_manager.create_refresh_token(user_id)
+        print(f"Token de refresco creado: {refresh_token[:50]}...")
+        
+        # Verificar token de acceso
+        print("\nVerificando token de acceso...")
+        payload = jwt_manager.verify_token(access_token, "access")
+        print(f"Token válido. Usuario: {payload['username']}, ID: {payload['sub']}")
+        
+        # Simular refresco de token
+        print("\nRefrescando token...")
+        new_tokens = jwt_manager.refresh_access_token(refresh_token)
+        print("Tokens refrescados exitosamente")
+        
+        # Verificar que el token viejo esté revocado
+        print(f"\nToken original revocado: {jwt_manager.is_token_revoked(refresh_token)}")
+        
+        # Intentar usar un token expirado/malformado
+        print("\nProbando token inválido...")
+        try:
+            jwt_manager.verify_token("token.invalido.malformado", "access")
+        except InvalidTokenError as e:
+            print(f"Error esperado: {e}")
+            
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+# Configuración de seguridad recomendada para producción
+def security_recommendations():
+    """
+    Recomendaciones de seguridad para implementación en producción.
+    """
+    recommendations = """
+    RECOMENDACIONES DE SEGURIDAD:
+    
+    1. ALMACENAMIENTO DE CLAVES:
+       - Usa variables de entorno: JWT_SECRET_KEY
+       - Considera usar un sistema de gestión de secretos (AWS Secrets Manager, HashiCorp Vault)
+       - Rota las claves regularmente
+       - Usa claves de al menos 256 bits (32 bytes)
+    
+    2. CONFIGURACIÓN:
+       - Establece tiempos de expiración cortos para tokens de acceso (15-30 minutos)
+       - Usa HTTPS siempre
+       - Implementa rate limiting para endpoints de autenticación
+    
+    3. ALMACENAMIENTO EN CLIENTE:
+       - Almacena tokens en HttpOnly cookies para prevenir XSS
+       - Usa SameSite y Secure flags en cookies
+       - Considera usar almacenamiento en memoria en lugar de localStorage
+    
+    4. LISTAS NEGRAS:
+       - Implementa un sistema de lista negra distribuido (Redis)
+       - Limpia tokens expirados regularmente de la lista negra
+    
+    5. MONITOREO:
+       - Registra intentos fallidos de autenticación
+       - Monitorea patrones anómalos de uso de tokens
+       - Implementa alertas para múltiples intentos fallidos
+    
+    6. VALIDACIÓN ADICIONAL:
+       - Valida el issuer (iss) si usas múltiples servicios
+       - Valida la audiencia (aud) si aplica
+       - Considera agregar fingerprint del dispositivo/cliente
+    """
+    return recommendations
+
+
+if __name__ == "__main__":
+    # Ejecutar ejemplo
+    example_usage()
+    
+    # Mostrar recomendaciones
+    print("\n" + "="*60)
+    print(security_recommendations())
+```

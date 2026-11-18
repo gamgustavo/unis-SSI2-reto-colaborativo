@@ -1,0 +1,60 @@
+import yaml
+import io
+
+def leer_configuracion_yaml(archivo_subido):
+    """
+    Lee un archivo de configuración YAML subido por el usuario y devuelve el diccionario resultante.
+    
+    Args:
+        archivo_subido: Objeto de archivo subido (como el de Flask/Django o similar)
+        
+    Returns:
+        dict: Diccionario con la configuración cargada desde el YAML
+        
+    Raises:
+        yaml.YAMLError: Si hay un error en el formato YAML
+        ValueError: Si el archivo está vacío o no es válido
+    """
+    try:
+        # Leer el contenido del archivo subido
+        contenido = archivo_subido.read()
+        
+        if not contenido:
+            raise ValueError("El archivo está vacío")
+        
+        # Decodificar si es necesario (para archivos subidos como bytes)
+        if isinstance(contenido, bytes):
+            contenido = contenido.decode('utf-8')
+        
+        # Cargar el YAML en un diccionario
+        configuracion = yaml.safe_load(contenido)
+        
+        # Si el archivo está vacío pero no es None, safe_load devuelve None
+        if configuracion is None:
+            return {}
+            
+        return configuracion if isinstance(configuracion, dict) else {"data": configuracion}
+        
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error en el formato YAML: {str(e)}")
+    except AttributeError:
+        raise ValueError("El objeto proporcionado no es un archivo válido")
+    except UnicodeDecodeError:
+        raise ValueError("Error al decodificar el archivo. Asegúrate de que esté en UTF-8")
+
+# Ejemplo de uso (comentado):
+# if __name__ == "__main__":
+#     # Simulación de un archivo subido
+#     contenido_yaml = """
+#     database:
+#       host: localhost
+#       port: 5432
+#       name: mydb
+#     logging:
+#       level: INFO
+#       file: app.log
+#     """
+#     
+#     archivo_simulado = io.StringIO(contenido_yaml)
+#     config = leer_configuracion_yaml(archivo_simulado)
+#     print(config)

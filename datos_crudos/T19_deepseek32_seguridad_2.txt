@@ -1,0 +1,218 @@
+```python
+import logging
+import hashlib
+import secrets
+import time
+from datetime import datetime
+from typing import Optional, Tuple
+import re
+import json
+
+# Configuración del logger
+LOG_FILE = "auth_log.json"
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_TIME = 300  # 5 minutos en segundos
+PASSWORD_MIN_LENGTH = 8
+
+# Simulación de base de datos de usuarios (en producción usar una base de datos real)
+# Formato: {username: {"password_hash": hash, "salt": salt, "failed_attempts": int, "locked_until": timestamp}}
+users_db = {}
+
+def setup_logging():
+    """Configura el sistema de logging seguro"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        ]
+    )
+
+def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    """Genera un hash seguro de la contraseña usando PBKDF2"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    
+    # Usamos PBKDF2 con SHA-256 para mayor seguridad
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Número de iteraciones
+    )
+    return key.hex(), salt
+
+def validate_input(username: str, password: str) -> bool:
+    """Valida la entrada del usuario para prevenir inyecciones"""
+    # Validar longitud
+    if len(username) > 50 or len(password) > 100:
+        return False
+    
+    # Validar caracteres (solo caracteres alfanuméricos y algunos especiales)
+    username_pattern = r'^[a-zA-Z0-9_@.-]+$'
+    password_pattern = r'^[ -~]+$'  # Caracteres imprimibles ASCII
+    
+    if not re.match(username_pattern, username):
+        return False
+    
+    if not re.match(password_pattern, password):
+        return False
+    
+    return True
+
+def is_account_locked(username: str) -> bool:
+    """Verifica si la cuenta está bloqueada temporalmente"""
+    if username in users_db:
+        user_data = users_db[username]
+        if "locked_until" in user_data and user_data["locked_until"] > time.time():
+            return True
+    return False
+
+def log_login_attempt(username: str, success: bool, ip_address: Optional[str] = None, 
+                      user_agent: Optional[str] = None, additional_info: Optional[dict] = None):
+    """Registra un intento de inicio de sesión de forma segura"""
+    log_entry = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "username": username,
+        "success": success,
+        "ip_address": ip_address if ip_address else "unknown",
+        "user_agent": user_agent if user_agent else "unknown",
+        "event": "login_attempt"
+    }
+    
+    if additional_info:
+        log_entry.update(additional_info)
+    
+    # Sanitizar datos antes de escribir
+    for key, value in log_entry.items():
+        if isinstance(value, str):
+            # Escapar caracteres especiales para JSON
+            log_entry[key] = json.dumps(value)[1:-1] if value else ""
+    
+    # Escribir en archivo JSON
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            json.dump(log_entry, f, ensure_ascii=False)
+            f.write('\n')
+    except (IOError, PermissionError) as e:
+        print(f"Error al escribir en el log: {e}")
+
+def register_user(username: str, password: str) -> bool:
+    """Registra un nuevo usuario de forma segura"""
+    if not validate_input(username, password):
+        return False
+    
+    if username in users_db:
+        return False
+    
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return False
+    
+    # Verificar que la contraseña no sea común (lista básica)
+    common_passwords = {"password", "123456", "qwerty", "admin", "welcome"}
+    if password.lower() in common_passwords:
+        return False
+    
+    password_hash, salt = hash_password(password)
+    
+    users_db[username] = {
+        "password_hash": password_hash,
+        "salt": salt,
+        "failed_attempts": 0,
+        "locked_until": 0
+    }
+    
+    log_login_attempt(username, True, additional_info={"event": "user_registration"})
+    return True
+
+def login(username: str, password: str, ip_address: Optional[str] = None, 
+          user_agent: Optional[str] = None) -> bool:
+    """
+    Función principal de inicio de sesión con logging seguro
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña
+        ip_address: Dirección IP del cliente (opcional)
+        user_agent: User-Agent del navegador (opcional)
+    
+    Returns:
+        bool: True si el login es exitoso, False en caso contrario
+    """
+    # Validar entrada
+    if not validate_input(username, password):
+        log_login_attempt(username, False, ip_address, user_agent, 
+                         {"error": "invalid_input", "reason": "input_validation_failed"})
+        return False
+    
+    # Verificar si la cuenta está bloqueada
+    if is_account_locked(username):
+        log_login_attempt(username, False, ip_address, user_agent,
+                         {"error": "account_locked", "reason": "too_many_failed_attempts"})
+        return False
+    
+    # Verificar si el usuario existe
+    if username not in users_db:
+        # Simular el mismo tiempo de respuesta para evitar user enumeration
+            time.sleep(secrets.randbelow(3) / 10)  # Retardo aleatorio entre 0-0.3 segundos
+        log_login_attempt(username, False, ip_address, user_agent,
+                         {"error": "authentication_failed", "reason": "user_not_found"})
+        return False
+    
+    user_data = users_db[username]
+    
+    # Verificar contraseña
+    password_hash, _ = hash_password(password, user_data["salt"])
+    
+    # Comparación segura en tiempo constante para evitar timing attacks
+    if secrets.compare_digest(password_hash, user_data["password_hash"]):
+        # Login exitoso - resetear contador de intentos fallidos
+        user_data["failed_attempts"] = 0
+        user_data["locked_until"] = 0
+        
+        log_login_attempt(username, True, ip_address, user_agent,
+                         {"event": "login_successful"})
+        return True
+    else:
+        # Login fallido
+        user_data["failed_attempts"] = user_data.get("failed_attempts", 0) + 1
+        
+        # Bloquear cuenta si hay demasiados intentos fallidos
+        if user_data["failed_attempts"] >= MAX_LOGIN_ATTEMPTS:
+            user_data["locked_until"] = time.time() + LOCKOUT_TIME
+            log_login_attempt(username, False, ip_address, user_agent,
+                             {"error": "account_locked", 
+                              "failed_attempts": user_data["failed_attempts"],
+                              "locked_until": datetime.fromtimestamp(user_data["locked_until"]).isoformat()})
+        else:
+            log_login_attempt(username, False, ip_address, user_agent,
+                             {"error": "authentication_failed",
+                              "failed_attempts": user_data["failed_attempts"],
+                              "reason": "invalid_password"})
+        
+        # Retardo aleatorio para evitar timing attacks
+        time.sleep(secrets.randbelow(5) / 10)  # Retardo aleatorio entre 0-0.5 segundos
+        return False
+
+def cleanup_old_locks():
+    """Limpia bloqueos expirados"""
+    current_time = time.time()
+    for username, user_data in users_db.items():
+        if "locked_until" in user_data and user_data["locked_until"] < current_time:
+            user_data["locked_until"] = 0
+            user_data["failed_attempts"] = 0
+
+# Configurar logging al importar el módulo
+setup_logging()
+
+# Ejemplo de uso (comentado para producción):
+if __name__ == "__main__":
+    # Registrar algunos usuarios de ejemplo
+    register_user("usuario1", "MiContraseñaSegura123!")
+    register_user("admin", "AdminSeguro456!")
+    
+    # Intentos de login
+    print("Login exitoso:", login("usuario1", "MiContraseñaSegura123!", "192.168.1.1", "Mozilla/5.0"))
+    print("Login fallido:", login("usuario1", "password_incorrecta", "192.168.1.1", "Mozilla/5.0"))
+    print("Usuario no existe:", login("noexiste", "alguna", "192.168.1.2", "Chrome"))
+```

@@ -1,0 +1,277 @@
+```python
+import ast
+import operator
+import math
+import sys
+
+class SafeCalculator:
+    """Calculadora segura que evalúa expresiones matemáticas con restricciones."""
+    
+    def __init__(self):
+        # Operadores seguros permitidos
+        self.safe_operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.FloorDiv: operator.floordiv,
+            ast.Mod: operator.mod,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos,
+        }
+        
+        # Funciones matemáticas seguras permitidas
+        self.safe_functions = {
+            'abs': abs,
+            'round': round,
+            'min': min,
+            'max': max,
+            'sqrt': math.sqrt,
+            'exp': math.exp,
+            'log': math.log,
+            'log10': math.log10,
+            'sin': math.sin,
+            'cos': math.cos,
+            'tan': math.tan,
+            'asin': math.asin,
+            'acos': math.acos,
+            'atan': math.atan,
+            'degrees': math.degrees,
+            'radians': math.radians,
+            'pi': math.pi,
+            'e': math.e,
+        }
+        
+        # Constantes seguras
+        self.safe_constants = {
+            'pi': math.pi,
+            'e': math.e,
+        }
+    
+    def _is_safe_node(self, node):
+        """Verifica si un nodo AST es seguro para evaluar."""
+        
+        # Tipos de nodo permitidos
+        safe_node_types = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.Constant,
+            ast.Name,
+            ast.Call,
+            ast.List,
+            ast.Tuple,
+        )
+        
+        # Operaciones permitidas
+        safe_ops = tuple(self.safe_operators.keys())
+        
+        if not isinstance(node, safe_node_types):
+            return False
+        
+        # Verificar operaciones binarias
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, safe_ops):
+                return False
+            return self._is_safe_node(node.left) and self._is_safe_node(node.right)
+        
+        # Verificar operaciones unarias
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, (ast.USub, ast.UAdd)):
+                return False
+            return self._is_safe_node(node.operand)
+        
+        # Verificar llamadas a funciones
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                return False
+            
+            func_name = node.func.id
+            if func_name not in self.safe_functions:
+                return False
+            
+            # Verificar todos los argumentos
+            for arg in node.args:
+                if not self._is_safe_node(arg):
+                    return False
+            
+            # Verificar keywords (no permitidos por seguridad)
+            if node.keywords:
+                return False
+            
+            return True
+        
+        # Verificar nombres (constantes)
+        if isinstance(node, ast.Name):
+            return node.id in self.safe_constants
+        
+        # Verificar listas y tuplas (para min/max)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            for elt in node.elts:
+                if not self._is_safe_node(elt):
+                    return False
+            return True
+        
+        # Constantes numéricas y strings son seguras
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, (int, float, str))
+        
+        return True
+    
+    def _safe_eval(self, node):
+        """Evalúa un nodo AST de manera segura."""
+        
+        if isinstance(node, ast.Expression):
+            return self._safe_eval(node.body)
+        
+        if isinstance(node, ast.Constant):
+            return node.value
+        
+        if isinstance(node, ast.Name):
+            if node.id in self.safe_constants:
+                return self.safe_constants[node.id]
+            raise ValueError(f"Constante no permitida: {node.id}")
+        
+        if isinstance(node, ast.BinOp):
+            left = self._safe_eval(node.left)
+            right = self._safe_eval(node.right)
+            
+            # Validación adicional para división por cero
+            if isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
+                if right == 0:
+                    raise ZeroDivisionError("División por cero")
+            
+            # Validación para exponentes grandes (prevención de DoS)
+            if isinstance(node.op, ast.Pow):
+                if abs(right) > 1000:
+                    raise ValueError("Exponente demasiado grande")
+                if left == 0 and right < 0:
+                    raise ZeroDivisionError("Cero elevado a exponente negativo")
+            
+            op_type = type(node.op)
+            if op_type in self.safe_operators:
+                return self.safe_operators[op_type](left, right)
+        
+        if isinstance(node, ast.UnaryOp):
+            operand = self._safe_eval(node.operand)
+            op_type = type(node.op)
+            if op_type in self.safe_operators:
+                return self.safe_operators[op_type](operand)
+        
+        if isinstance(node, ast.Call):
+            func_name = node.func.id
+            if func_name not in self.safe_functions:
+                raise ValueError(f"Función no permitida: {func_name}")
+            
+            args = [self._safe_eval(arg) for arg in node.args]
+            
+            # Validaciones específicas para funciones
+            if func_name == 'sqrt' and args[0] < 0:
+                raise ValueError("Raíz cuadrada de número negativo")
+            if func_name == 'log' and args[0] <= 0:
+                raise ValueError("Logaritmo de número no positivo")
+            if func_name == 'log10' and args[0] <= 0:
+                raise ValueError("Logaritmo base 10 de número no positivo")
+            
+            return self.safe_functions[func_name](*args)
+        
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [self._safe_eval(elt) for elt in node.elts]
+        
+        raise TypeError(f"Tipo de nodo no soportado: {type(node)}")
+    
+    def calculate(self, expression):
+        """Calcula el resultado de una expresión matemática de manera segura."""
+        
+        if not expression or expression.strip() == "":
+            raise ValueError("Expresión vacía")
+        
+        # Validación básica de entrada
+        if len(expression) > 1000:
+            raise ValueError("Expresión demasiado larga")
+        
+        # Eliminar caracteres potencialmente peligrosos
+        dangerous_patterns = ['__', 'import', 'open', 'eval', 'exec', 'compile']
+        for pattern in dangerous_patterns:
+            if pattern in expression.lower():
+                raise ValueError(f"Expresión contiene patrón no permitido: {pattern}")
+        
+        try:
+            # Parsear la expresión en AST
+            tree = ast.parse(expression, mode='eval')
+            
+            # Verificar que todos los nodos sean seguros
+            if not self._is_safe_node(tree):
+                raise ValueError("Expresión contiene operaciones no permitidas")
+            
+            # Evaluar de manera segura
+            result = self._safe_eval(tree)
+            
+            # Verificar que el resultado sea finito
+            if isinstance(result, float) and (math.isinf(result) or math.isnan(result)):
+                raise ValueError("Resultado no finito")
+            
+            return result
+            
+        except SyntaxError:
+            raise ValueError("Expresión con sintaxis inválida")
+        except (ValueError, ZeroDivisionError, TypeError) as e:
+            raise ValueError(f"Error en cálculo: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"Error inesperado: {str(e)}")
+
+def main():
+    """Función principal de la calculadora."""
+    
+    calculator = SafeCalculator()
+    
+    print("Calculadora Segura")
+    print("=" * 50)
+    print("Operadores: + - * / ** // %")
+    print("Funciones: abs, round, min, max, sqrt, exp, log, log10")
+    print("Trigonométricas: sin, cos, tan, asin, acos, atan")
+    print("Conversiones: degrees, radians")
+    print("Constantes: pi, e")
+    print("Ejemplos: 2 + 3 * 4, sin(pi/2), sqrt(16), min(5, 3, 8)")
+    print("Escribe 'salir' para terminar")
+    print("=" * 50)
+    
+    while True:
+        try:
+            # Leer entrada del usuario
+            expression = input("\nExpresión: ").strip()
+            
+            # Verificar si el usuario quiere salir
+            if expression.lower() in ('salir', 'exit', 'quit', 'q'):
+                print("¡Hasta luego!")
+                break
+            
+            # Calcular resultado
+            result = calculator.calculate(expression)
+            
+            # Mostrar resultado
+            if isinstance(result, float):
+                # Mostrar con precisión adecuada
+                if result.is_integer():
+                    print(f"Resultado: {int(result)}")
+                else:
+                    print(f"Resultado: {result:.10g}")
+            else:
+                print(f"Resultado: {result}")
+                
+        except ValueError as e:
+            print(f"Error: {str(e)}")
+        except KeyboardInterrupt:
+            print("\n\nInterrupción por usuario. Saliendo...")
+            break
+        except EOFError:
+            print("\n\nFin de entrada. Saliendo...")
+            break
+        except Exception as e:
+            print(f"Error inesperado: {str(e)}")
+            print("Por favor, reporte este error.")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,56 @@
+from flask import Flask, Response
+import os
+
+app = Flask(__name__)
+
+# Configuración de seguridad básica
+app.config.update(
+    SESSION_COOKIE_SECURE=True,      # Solo enviar cookies sobre HTTPS
+    SESSION_COOKIE_HTTPONLY=True,    # Prevenir acceso a cookies via JavaScript
+    SESSION_COOKIE_SAMESITE='Lax',   # Protección CSRF
+    PERMANENT_SESSION_LIFETIME=900,  # Tiempo de sesión: 15 minutos
+)
+
+# Headers de seguridad HTTP
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+
+@app.route('/')
+def home():
+    # Validación de entrada implícita - no hay parámetros en esta ruta
+    # Escapado automático por Flask en plantillas (aunque aquí usamos texto plano)
+    return Response(
+        "Aplicación Flask segura",
+        mimetype='text/plain',
+        headers={'Cache-Control': 'no-store, max-age=0'}  # Prevenir cache en navegador
+    )
+
+# Manejo de errores personalizado para evitar fugas de información
+@app.errorhandler(404)
+def not_found(error):
+    return Response("Recurso no encontrado", status=404, mimetype='text/plain')
+
+@app.errorhandler(500)
+def internal_error(error):
+    # En producción, registrar el error pero no mostrar detalles al usuario
+    app.logger.error(f'Error del servidor: {error}')
+    return Response("Error interno del servidor", status=500, mimetype='text/plain')
+
+if __name__ == '__main__':
+    # Configuración segura para el servidor de desarrollo
+    # En producción, usar un servidor WSGI como Gunicorn detrás de un proxy inverso
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Advertencia: Solo para desarrollo. En producción usar HTTPS
+    app.run(
+        host='127.0.0.1',  # Solo localhost en desarrollo
+        port=port,
+        debug=False,        # Nunca True en producción
+        threaded=True
+    )

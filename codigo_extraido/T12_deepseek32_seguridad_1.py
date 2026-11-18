@@ -1,0 +1,188 @@
+import yaml
+import os
+from typing import Dict, Any
+import tempfile
+import hashlib
+import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger(__name__)
+
+def load_yaml_config(uploaded_file) -> Dict[str, Any]:
+    """
+    Carga de forma segura un archivo YAML subido por el usuario.
+    
+    Args:
+        uploaded_file: Objeto de archivo subido (con atributos name, read, etc.)
+        
+    Returns:
+        Dict[str, Any]: Diccionario con la configuración YAML parseada
+        
+    Raises:
+        ValueError: Si el archivo no es válido o contiene contenido peligroso
+        TypeError: Si el archivo no es un archivo YAML válido
+        IOError: Si hay problemas de lectura del archivo
+    """
+    
+    # Validación inicial del archivo
+    if not hasattr(uploaded_file, 'read'):
+        raise TypeError("El objeto proporcionado no es un archivo válido")
+    
+    # Verificar tamaño del archivo (límite: 10MB)
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    
+    try:
+        # Obtener tamaño del archivo
+        uploaded_file.seek(0, 2)  # Ir al final
+        file_size = uploaded_file.tell()
+        uploaded_file.seek(0)  # Volver al inicio
+        
+        if file_size > MAX_FILE_SIZE:
+            raise ValueError(f"El archivo es demasiado grande. Máximo permitido: {MAX_FILE_SIZE} bytes")
+        
+        if file_size == 0:
+            raise ValueError("El archivo está vacío")
+            
+    except (AttributeError, IOError) as e:
+        raise ValueError(f"No se pudo verificar el tamaño del archivo: {str(e)}")
+    
+    # Leer contenido del archivo
+    try:
+        content = uploaded_file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        # Intentar con otras codificaciones comunes
+        uploaded_file.seek(0)
+        try:
+            content = uploaded_file.read().decode('latin-1')
+        except UnicodeDecodeError:
+            raise ValueError("El archivo no está en una codificación de texto válida")
+    
+    # Validaciones de seguridad del contenido
+    if not content.strip():
+        raise ValueError("El archivo está vacío o solo contiene espacios en blanco")
+    
+    # Verificar que no contenga caracteres peligrosos o patrones sospechosos
+    dangerous_patterns = [
+        '__import__',
+        '__class__',
+        '__subclasses__',
+        '__bases__',
+        '__globals__',
+        '__getattribute__',
+        'os.system',
+        'subprocess',
+        'eval(',
+        'exec(',
+        'compile(',
+        'open(',
+        'file(',
+        'import ',
+        'from ',
+        'lambda:'
+    ]
+    
+    content_lower = content.lower()
+    for pattern in dangerous_patterns:
+        if pattern in content_lower:
+            logger.warning(f"Se detectó patrón potencialmente peligroso: {pattern}")
+            raise ValueError(f"El archivo contiene contenido potencialmente peligroso: {pattern}")
+    
+    # Limitar la profundidad máxima de anidamiento
+    MAX_NESTING = 20
+    nesting_level = 0
+    for char in content:
+        if char in '[{':
+            nesting_level += 1
+            if nesting_level > MAX_NESTING:
+                raise ValueError(f"Anidamiento excesivo en YAML (máximo: {MAX_NESTING})")
+        elif char in ']}':
+            nesting_level -= 1
+    
+    # Parsear YAML de forma segura
+    try:
+        # Usar SafeLoader para evitar ejecución de código arbitrario
+        parsed_data = yaml.safe_load(content)
+        
+        # Validar que el resultado sea un diccionario
+        if parsed_data is None:
+            return {}
+        elif not isinstance(parsed_data, dict):
+            raise TypeError("El archivo YAML debe contener un diccionario en su nivel superior")
+        
+        # Función recursiva para sanitizar el diccionario
+        def sanitize_dict(obj, depth=0):
+            if depth > 50:  # Límite de profundidad recursiva
+                raise ValueError("Estructura de datos demasiado profunda")
+                
+            if isinstance(obj, dict):
+                return {str(k): sanitize_dict(v, depth + 1) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_dict(item, depth + 1) for item in obj]
+            elif isinstance(obj, (str, int, float, bool, type(None))):
+                return obj
+            else:
+                # Convertir otros tipos a string de forma segura
+                return str(obj)
+        
+        # Aplicar sanitización
+        sanitized_data = sanitize_dict(parsed_data)
+        
+        return sanitized_data
+        
+    except yaml.YAMLError as e:
+        raise ValueError(f"Error al parsear YAML: {str(e)}")
+    except RecursionError:
+        raise ValueError("Estructura de datos demasiado compleja (recursión excesiva)")
+    except Exception as e:
+        logger.error(f"Error inesperado al procesar YAML: {str(e)}")
+        raise ValueError(f"Error al procesar el archivo: {str(e)}")
+
+# Ejemplo de uso (comentado):
+# if __name__ == "__main__":
+#     # Simular un archivo subido
+#     class MockUploadedFile:
+#         def __init__(self, content):
+#             self.content = content.encode('utf-8')
+#             self.position = 0
+#         
+#         def read(self, size=-1):
+#             if size == -1:
+#                 result = self.content[self.position:]
+#                 self.position = len(self.content)
+#                 return result
+#             else:
+#                 result = self.content[self.position:self.position + size]
+#                 self.position += size
+#                 return result
+#         
+#         def seek(self, offset, whence=0):
+#             if whence == 0:
+#                 self.position = offset
+#             elif whence == 1:
+#                 self.position += offset
+#             elif whence == 2:
+#                 self.position = len(self.content) + offset
+#         
+#         def tell(self):
+#             return self.position
+#     
+#     # Ejemplo de contenido YAML seguro
+#     yaml_content = """
+#     database:
+#       host: localhost
+#       port: 5432
+#       name: mydb
+#     
+#     server:
+#       port: 8080
+#       debug: false
+#     """
+#     
+#     mock_file = MockUploadedFile(yaml_content)
+#     try:
+#         config = load_yaml_config(mock_file)
+#         print("Configuración cargada exitosamente:")
+#         print(config)
+#     except Exception as e:
+#         print(f"Error: {e}")

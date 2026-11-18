@@ -1,0 +1,105 @@
+```python
+import os
+import uuid
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
+from PIL import Image
+import imghdr
+
+app = Flask(__name__)
+
+# Configuración segura
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2MB máximo
+app.config['UPLOAD_FOLDER'] = 'profile_images'
+app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['ALLOWED_MIME_TYPES'] = {'image/png', 'image/jpeg', 'image/gif'}
+
+# Crear directorio de subidas si no existe
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def allowed_file(filename):
+    """Verificar extensión y tipo MIME del archivo"""
+    if '.' not in filename:
+        return False
+
+    ext = filename.rsplit('.', 1)[1].lower()
+    if ext not in app.config['ALLOWED_EXTENSIONS']:
+        return False
+
+    # Verificar tipo MIME real
+    file_stream = request.files[filename].stream
+    file_stream.seek(0)  # Reiniciar el stream para la verificación
+    mime_type = imghdr.what(file_stream)
+    if mime_type not in ['png', 'jpeg', 'gif']:
+        return False
+
+    # Verificar con PIL que es una imagen válida
+    try:
+        file_stream.seek(0)
+        Image.open(file_stream).verify()
+    except:
+        return False
+
+    return True
+
+def sanitize_filename(filename):
+    """Sanitizar el nombre del archivo para evitar path traversal"""
+    filename = secure_filename(filename)
+    if not filename:
+        filename = str(uuid.uuid4())
+    return filename
+
+@app.route('/api/upload-profile', methods=['POST'])
+def upload_profile():
+    # Verificar que el request tiene el archivo
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
+
+    file = request.files['file']
+
+    # Verificar que el usuario seleccionó un archivo
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    # Verificar que el archivo es válido
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Invalid file type or extension'}), 400
+
+    try:
+        # Sanitizar nombre de archivo
+        filename = sanitize_filename(file.filename)
+        unique_filename = f"{uuid.uuid4().hex}_{filename}"
+
+        # Verificar y procesar la imagen
+        file.stream.seek(0)
+        img = Image.open(file.stream)
+
+        # Convertir a RGB si es necesario (para evitar problemas con PNG con transparencia)
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+
+        # Redimensionar si es muy grande (seguridad adicional)
+        if img.width > 2000 or img.height > 2000:
+            img.thumbnail((2000, 2000))
+
+        # Guardar la imagen
+        save_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        img.save(save_path, quality=85)
+
+        # Verificar que el archivo se guardó correctamente
+        if not os.path.exists(save_path):
+            return jsonify({'error': 'Failed to save the file'}), 500
+
+        return jsonify({
+            'message': 'Profile image uploaded successfully',
+            'filename': unique_filename,
+            'path': f"/profile_images/{unique_filename}"
+        }), 201
+
+    except Exception as e:
+        app.logger.error(f"Error processing image: {str(e)}")
+        return jsonify({'error': 'Error processing the image'}), 500
+
+if __name__ == '__main__':
+    app.run(debug=False)  # Nunca usar debug=True en producción
+```

@@ -1,0 +1,56 @@
+```python
+import os
+from flask import Flask, request, jsonify, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración segura
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limita el tamaño de los archivos a 16MB
+app.config['UPLOAD_FOLDER'] = 'documentos'
+app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'md'}  # Extensiones permitidas
+
+# Asegura que la carpeta de documentos exista
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def allowed_file(filename):
+    """Verifica si el archivo tiene una extensión permitida."""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+@app.route('/documento/<filename>', methods=['GET'])
+def get_document(filename):
+    """Endpoint para obtener el contenido de un archivo de la carpeta 'documentos'."""
+
+    # Validación del nombre del archivo
+    if not filename:
+        abort(400, description="Nombre de archivo no proporcionado")
+
+    # Sanitiza el nombre del archivo para evitar path traversal
+    secure_name = secure_filename(filename)
+    if not secure_name or secure_name != filename:
+        abort(400, description="Nombre de archivo no válido")
+
+    # Verifica que el archivo tenga una extensión permitida
+    if not allowed_file(filename):
+        abort(400, description="Tipo de archivo no permitido")
+
+    # Construye la ruta completa del archivo
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    # Verifica que el archivo exista y esté dentro de la carpeta permitida
+    if not os.path.isfile(file_path) or not os.path.abspath(file_path).startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+        abort(404, description="Archivo no encontrado")
+
+    # Lee y devuelve el contenido del archivo
+    try:
+        with open(file_path, 'rb') as file:
+            content = file.read()
+        return content, 200, {'Content-Type': 'application/octet-stream'}
+    except Exception as e:
+        app.logger.error(f"Error al leer el archivo {filename}: {str(e)}")
+        abort(500, description="Error al leer el archivo")
+
+if __name__ == '__main__':
+    app.run(debug=False)  # Desactiva el modo debug en producción
+```

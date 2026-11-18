@@ -1,0 +1,109 @@
+import os
+from flask import Flask, request, jsonify, send_file, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración
+DOCUMENTS_FOLDER = 'documentos'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'md', 'json', 'csv', 'xml'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB límite
+
+# Validar extensión del archivo
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/get_file', methods=['GET'])
+def get_file_content():
+    """
+    Endpoint para obtener el contenido de un archivo de la carpeta 'documentos'
+    Parámetro: filename - nombre del archivo a recuperar
+    """
+    try:
+        # Obtener parámetro filename
+        filename = request.args.get('filename')
+        
+        # Validar que se proporcionó un nombre de archivo
+        if not filename:
+            return jsonify({'error': 'Se requiere el parámetro filename'}), 400
+        
+        # Sanitizar el nombre del archivo para prevenir path traversal
+        safe_filename = secure_filename(filename)
+        
+        # Validar que el nombre sanitizado no esté vacío
+        if not safe_filename:
+            return jsonify({'error': 'Nombre de archivo inválido'}), 400
+        
+        # Validar extensión del archivo
+        if not allowed_file(safe_filename):
+            return jsonify({'error': f'Tipo de archivo no permitido. Extensiones permitidas: {ALLOWED_EXTENSIONS}'}), 400
+        
+        # Construir ruta segura
+        documents_path = os.path.abspath(DOCUMENTS_FOLDER)
+        file_path = os.path.join(documents_path, safe_filename)
+        
+        # Prevenir path traversal attacks
+        if not os.path.commonpath([documents_path, os.path.abspath(file_path)]) == documents_path:
+            return jsonify({'error': 'Ruta de archivo no permitida'}), 403
+        
+        # Verificar que el archivo exista
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Archivo no encontrado'}), 404
+        
+        # Verificar que sea un archivo (no un directorio)
+        if not os.path.isfile(file_path):
+            return jsonify({'error': 'La ruta especificada no es un archivo'}), 400
+        
+        # Verificar tamaño del archivo
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            return jsonify({'error': f'Archivo demasiado grande. Tamaño máximo: {MAX_FILE_SIZE} bytes'}), 413
+        
+        # Leer y devolver el contenido del archivo
+        try:
+            # Para archivos de texto, leer como texto
+            if safe_filename.rsplit('.', 1)[1].lower() in {'txt', 'md', 'json', 'csv', 'xml'}:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                return jsonify({
+                    'filename': safe_filename,
+                    'content': content,
+                    'size': file_size
+                })
+            else:
+                # Para archivos binarios, devolver como descarga
+                return send_file(
+                    file_path,
+                    as_attachment=False,
+                    download_name=safe_filename,
+                    mimetype='application/octet-stream'
+                )
+                
+        except UnicodeDecodeError:
+            # Si no se puede decodificar como UTF-8, tratar como binario
+            return send_file(
+                file_path,
+                as_attachment=False,
+                download_name=safe_filename,
+                mimetype='application/octet-stream'
+            )
+        except Exception as e:
+            return jsonify({'error': f'Error al leer el archivo: {str(e)}'}), 500
+            
+    except Exception as e:
+        # Log del error (en producción usar logging apropiado)
+        app.logger.error(f'Error en get_file_content: {str(e)}')
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+if __name__ == '__main__':
+    # Crear la carpeta documentos si no existe
+    if not os.path.exists(DOCUMENTS_FOLDER):
+        os.makedirs(DOCUMENTS_FOLDER)
+    
+    # Configuración de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+    
+    # Ejecutar en modo desarrollo (en producción usar WSGI server)
+    app.run(debug=False, host='0.0.0.0', port=5000)

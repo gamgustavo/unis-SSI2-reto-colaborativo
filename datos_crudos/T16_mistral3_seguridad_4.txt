@@ -1,0 +1,167 @@
+```python
+import os
+import jwt
+import datetime
+from typing import Optional, Dict, Any
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
+
+# Configuración segura para JWT
+class JWTConfig:
+    # Generar claves RSA en tiempo de ejecución (en producción, estas deberían ser persistentes y seguras)
+    _private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=4096,
+        backend=default_backend()
+    )
+    _public_key = _private_key.public_key()
+
+    # Configuración de seguridad
+    ALGORITHM = "RS256"  # Algoritmo asimétrico recomendado
+    ACCESS_TOKEN_EXPIRE_MINUTES = 15  # Tiempo de expiración corto para tokens de acceso
+    REFRESH_TOKEN_EXPIRE_DAYS = 7  # Tiempo de expiración más largo para tokens de refresco
+    ISSUER = "auth_service"  # Identificador del emisor
+    AUDIENCE = "user_auth"  # Identificador de la audiencia
+
+    @classmethod
+    def get_private_key(cls) -> str:
+        """Obtener la clave privada en formato PEM"""
+        return cls._private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode('utf-8')
+
+    @classmethod
+    def get_public_key(cls) -> str:
+        """Obtener la clave pública en formato PEM"""
+        return cls._public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+
+def create_jwt_token(
+    data: Dict[str, Any],
+    token_type: str = "access",
+    expires_delta: Optional[datetime.timedelta] = None
+) -> str:
+    """
+    Crear un token JWT seguro con las mejores prácticas.
+
+    Args:
+        data: Diccionario con los claims del token
+        token_type: Tipo de token ("access" o "refresh")
+        expires_delta: Tiempo de expiración personalizado
+
+    Returns:
+        Token JWT codificado
+    """
+    if token_type not in ["access", "refresh"]:
+        raise ValueError("token_type debe ser 'access' o 'refresh'")
+
+    # Crear una copia del diccionario para no modificar el original
+    payload = data.copy()
+
+    # Configurar expiración según el tipo de token
+    if expires_delta:
+        expire = datetime.datetime.utcnow() + expires_delta
+    else:
+        if token_type == "access":
+            expire = datetime.datetime.utcnow() + datetime.timedelta(
+                minutes=JWTConfig.ACCESS_TOKEN_EXPIRE_MINUTES
+            )
+        else:
+            expire = datetime.datetime.utcnow() + datetime.timedelta(
+                days=JWTConfig.REFRESH_TOKEN_EXPIRE_DAYS
+            )
+
+    # Añadir claims estándar recomendados por seguridad
+    payload.update({
+        "exp": expire,
+        "iat": datetime.datetime.utcnow(),
+        "iss": JWTConfig.ISSUER,
+        "aud": JWTConfig.AUDIENCE,
+        "jti": os.urandom(16).hex(),  # ID único del token
+        "token_type": token_type
+    })
+
+    # Codificar el token con la clave privada
+    return jwt.encode(
+        payload,
+        JWTConfig.get_private_key(),
+        algorithm=JWTConfig.ALGORITHM
+    )
+
+def verify_jwt_token(token: str) -> Dict[str, Any]:
+    """
+    Verificar y decodificar un token JWT de manera segura.
+
+    Args:
+        token: Token JWT a verificar
+
+    Returns:
+        Diccionario con los claims del token
+
+    Raises:
+        jwt.ExpiredSignatureError: Si el token ha expirado
+        jwt.InvalidTokenError: Si el token es inválido por cualquier razón
+    """
+    try:
+        # Decodificar y verificar el token con la clave pública
+        payload = jwt.decode(
+            token,
+            JWTConfig.get_public_key(),
+            algorithms=[JWTConfig.ALGORITHM],
+            issuer=JWTConfig.ISSUER,
+            audience=JWTConfig.AUDIENCE,
+            options={
+                "require": ["exp", "iat", "iss", "aud", "jti", "token_type"],
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True
+            }
+        )
+
+        # Verificar que el token no haya sido revocado (en producción, esto debería consultar una lista de revocación)
+        # Aquí podrías añadir lógica para verificar en una base de datos o caché
+
+        return payload
+
+    except jwt.ExpiredSignatureError:
+        raise jwt.ExpiredSignatureError("Token has expired")
+    except jwt.InvalidTokenError as e:
+        raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
+
+def create_access_token(data: Dict[str, Any]) -> str:
+    """Crear un token de acceso JWT"""
+    return create_jwt_token(data, token_type="access")
+
+def create_refresh_token(data: Dict[str, Any]) -> str:
+    """Crear un token de refresco JWT"""
+    return create_jwt_token(data, token_type="refresh")
+
+def get_token_type(token: str) -> str:
+    """
+    Obtener el tipo de token sin verificar la firma (útil para routing)
+
+    Args:
+        token: Token JWT
+
+    Returns:
+        Tipo de token ("access" o "refresh")
+
+    Raises:
+        jwt.InvalidTokenError: Si el token es inválido o no contiene el claim token_type
+    """
+    try:
+        # Decodificar sin verificar la firma (solo para obtener el tipo)
+        payload = jwt.decode(
+            token,
+            options={"verify_signature": False}
+        )
+        return payload.get("token_type")
+    except jwt.InvalidTokenError as e:
+        raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
+```

@@ -1,0 +1,259 @@
+```python
+import os
+import jwt
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any, Tuple
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
+
+# Configuración segura de parámetros JWT
+class JWTConfig:
+    # Generar claves RSA en tiempo de ejecución (en producción, estas deberían ser persistentes y seguras)
+    _private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=4096,
+        backend=default_backend()
+    )
+    _public_key = _private_key.public_key()
+
+    # Convertir claves a formato PEM
+    PRIVATE_KEY = _private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    PUBLIC_KEY = _public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    # Algoritmo seguro para firmar tokens
+    ALGORITHM = "RS256"
+    # Tiempo de expiración del token (15 minutos para access token)
+    ACCESS_TOKEN_EXPIRE_MINUTES = 15
+    # Tiempo de expiración del refresh token (7 días)
+    REFRESH_TOKEN_EXPIRE_DAYS = 7
+    # Issuer del token
+    ISSUER = "secure_app"
+    # Audience del token
+    AUDIENCE = "user_auth"
+    # Leeway para compensar diferencias de reloj (5 segundos)
+    LEEWAY = 5
+
+def generate_rsa_key_pair() -> Tuple[bytes, bytes]:
+    """Genera un par de claves RSA para firmar y verificar tokens JWT.
+    En producción, estas claves deberían ser generadas una vez y almacenadas de forma segura."""
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=4096,
+        backend=default_backend()
+    )
+    public_key = private_key.public_key()
+
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    return private_pem, public_pem
+
+def create_access_token(
+    subject: str,
+    user_claims: Optional[Dict[str, Any]] = None,
+    expires_delta: Optional[timedelta] = None
+) -> str:
+    """Crea un token JWT de acceso con claims seguros.
+
+    Args:
+        subject: Identificador único del usuario (sub claim)
+        user_claims: Diccionario con claims adicionales del usuario
+        expires_delta: Tiempo de expiración personalizado
+
+    Returns:
+        Token JWT firmado
+    """
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=JWTConfig.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+
+    # Claims estándar seguros
+    standard_claims = {
+        "iss": JWTConfig.ISSUER,
+        "aud": JWTConfig.AUDIENCE,
+        "sub": str(subject),  # Convertir a string para evitar problemas con tipos
+        "iat": int(time.time()),
+        "exp": expire,
+        "nbf": int(time.time()),  # Not Before
+        "jti": os.urandom(16).hex(),  # JWT ID único
+        "token_type": "access"
+    }
+
+    # Combinar claims estándar con claims del usuario
+    claims = {**standard_claims, **(user_claims or {})}
+
+    # Firmar el token con clave privada RSA
+    encoded_jwt = jwt.encode(
+        claims,
+        JWTConfig.PRIVATE_KEY,
+        algorithm=JWTConfig.ALGORITHM
+    )
+
+    return encoded_jwt
+
+def create_refresh_token(
+    subject: str,
+    expires_delta: Optional[timedelta] = None
+) -> str:
+    """Crea un token JWT de refresco con claims seguros.
+
+    Args:
+        subject: Identificador único del usuario (sub claim)
+        expires_delta: Tiempo de expiración personalizado
+
+    Returns:
+        Token JWT firmado
+    """
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(
+            days=JWTConfig.REFRESH_TOKEN_EXPIRE_DAYS
+        )
+
+    # Claims estándar para refresh token
+    claims = {
+        "iss": JWTConfig.ISSUER,
+        "aud": JWTConfig.AUDIENCE,
+        "sub": str(subject),
+        "iat": int(time.time()),
+        "exp": expire,
+        "nbf": int(time.time()),
+        "jti": os.urandom(16).hex(),
+        "token_type": "refresh"
+    }
+
+    # Firmar el token
+    encoded_jwt = jwt.encode(
+        claims,
+        JWTConfig.PRIVATE_KEY,
+        algorithm=JWTConfig.ALGORITHM
+    )
+
+    return encoded_jwt
+
+def verify_token(token: str, token_type: str = "access") -> Dict[str, Any]:
+    """Verifica y decodifica un token JWT con validaciones de seguridad.
+
+    Args:
+        token: Token JWT a verificar
+        token_type: Tipo de token esperado ("access" o "refresh")
+
+    Returns:
+        Diccionario con los claims del token
+
+    Raises:
+        jwt.ExpiredSignatureError: Si el token ha expirado
+        jwt.InvalidTokenError: Si el token es inválido por cualquier razón
+        jwt.InvalidIssuerError: Si el issuer no coincide
+        jwt.InvalidAudienceError: Si la audiencia no coincide
+        ValueError: Si el tipo de token no coincide
+    """
+    try:
+        # Decodificar y verificar el token
+        payload = jwt.decode(
+            token,
+            JWTConfig.PUBLIC_KEY,
+            algorithms=[JWTConfig.ALGORITHM],
+            issuer=JWTConfig.ISSUER,
+            audience=JWTConfig.AUDIENCE,
+            options={
+                "require": ["exp", "nbf", "iat", "iss", "aud", "sub", "jti", "token_type"],
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+            leeway=JWTConfig.LEEWAY
+        )
+
+        # Verificar tipo de token
+        if payload.get("token_type") != token_type:
+            raise jwt.InvalidTokenError(f"Token type mismatch. Expected {token_type}")
+
+        # Verificar que el token no haya sido revocado (en producción, esto requeriría una lista de revocación)
+        # Aquí podrías implementar lógica para verificar contra una lista de tokens revocados
+
+        return payload
+
+    except jwt.PyJWTError as e:
+        # Registrar el error en producción (logging)
+        raise jwt.InvalidTokenError(f"Token verification failed: {str(e)}")
+
+def get_token_subject(token: str) -> str:
+    """Obtiene el subject de un token JWT sin verificar la firma.
+    Útil para operaciones donde solo se necesita el identificador del usuario.
+
+    Args:
+        token: Token JWT
+
+    Returns:
+        Subject del token
+
+    Raises:
+        jwt.InvalidTokenError: Si el token no contiene el claim 'sub'
+    """
+    try:
+        # Decodificar sin verificar la firma (solo para obtener el subject)
+        payload = jwt.decode(
+            token,
+            options={"verify_signature": False},
+            algorithms=[JWTConfig.ALGORITHM]
+        )
+        return payload.get("sub")
+    except jwt.PyJWTError as e:
+        raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
+
+# Ejemplo de uso seguro
+if __name__ == "__main__":
+    # Generar tokens para un usuario
+    user_id = "user123"
+    user_claims = {
+        "username": "johndoe",
+        "email": "john@example.com",
+        "roles": ["user", "premium"]
+    }
+
+    # Crear tokens
+    access_token = create_access_token(user_id, user_claims)
+    refresh_token = create_refresh_token(user_id)
+
+    print(f"Access Token: {access_token[:50]}...")
+    print(f"Refresh Token: {refresh_token[:50]}...")
+
+    # Verificar tokens
+    try:
+        access_payload = verify_token(access_token, "access")
+        print("\nAccess Token Verified:")
+        print(f"Subject: {access_payload['sub']}")
+        print(f"Username: {access_payload['username']}")
+        print(f"Expires at: {datetime.fromtimestamp(access_payload['exp'], timezone.utc)}")
+
+        refresh_payload = verify_token(refresh_token, "refresh")
+        print("\nRefresh Token Verified:")
+        print(f"Subject: {refresh_payload['sub']}")
+        print(f"Expires at: {datetime.fromtimestamp(refresh_payload['exp'], timezone.utc)}")
+
+    except jwt.PyJWTError as e:
+        print(f"Token verification failed: {e}")
+```

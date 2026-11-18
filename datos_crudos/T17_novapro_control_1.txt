@@ -1,0 +1,31 @@
+```python
+import re
+
+def evaluate(expression):
+    try:
+        # Validar que la expresión solo contenga caracteres válidos
+        if re.match(r'^[0-9+\-*/(). ]+$', expression) is None:
+            raise ValueError("La expresión contiene caracteres no válidos.")
+        
+        # Evaluar la expresión
+        result = eval(expression)
+        return result
+    except Exception as e:
+        return str(e)
+
+def main():
+    print("Calculadora de consola")
+    print("Ingrese 'salir' para terminar.")
+    
+    while True:
+        expression = input("Ingrese una expresión matemática: ")
+        
+        if expression.lower() == 'salir':
+            break
+        
+        result = evaluate(expression)
+        print(f"Resultado: {result}")
+
+if __name__ == "__main__":
+    main()
+```

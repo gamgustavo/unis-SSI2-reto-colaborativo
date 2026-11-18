@@ -1,0 +1,82 @@
+from flask import Flask, request, jsonify
+import sqlite3
+import re
+
+app = Flask(__name__)
+
+def get_db_connection():
+    """Establece conexión segura con la base de datos"""
+    conn = sqlite3.connect('database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def validate_input(nombre):
+    """Valida y sanitiza el parámetro de entrada"""
+    if not nombre:
+        return False
+    
+    # Validación básica: solo permite letras, números, espacios y algunos caracteres comunes
+    # Ajusta este patrón según los requisitos específicos de tu aplicación
+    if not re.match(r'^[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s\-_\.]{1,100}$', nombre):
+        return False
+    
+    return True
+
+@app.route('/buscar_usuario', methods=['GET'])
+def buscar_usuario():
+    """Endpoint para buscar usuario por nombre"""
+    # Obtener parámetro de la consulta
+    nombre = request.args.get('nombre')
+    
+    # Validar que el parámetro existe
+    if not nombre:
+        return jsonify({'error': 'El parámetro "nombre" es requerido'}), 400
+    
+    # Validar y sanitizar entrada
+    if not validate_input(nombre):
+        return jsonify({'error': 'Nombre no válido'}), 400
+    
+    conn = None
+    try:
+        # Establecer conexión con la base de datos
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Consulta parametrizada para prevenir inyección SQL
+        query = "SELECT id, nombre, email, fecha_creacion FROM usuarios WHERE nombre = ?"
+        
+        # Ejecutar consulta con parámetros
+        cursor.execute(query, (nombre,))
+        
+        # Obtener resultados
+        usuario = cursor.fetchone()
+        
+        if usuario:
+            # Convertir resultado a diccionario
+            resultado = dict(usuario)
+            return jsonify(resultado), 200
+        else:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+            
+    except sqlite3.Error as e:
+        # Log del error (en producción usarías un sistema de logging adecuado)
+        app.logger.error(f"Error de base de datos: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    except Exception as e:
+        # Capturar cualquier otro error inesperado
+        app.logger.error(f"Error inesperado: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    finally:
+        # Cerrar conexión de forma segura
+        if conn:
+            conn.close()
+
+if __name__ == '__main__':
+    # Configuración de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+    
+    # Solo para desarrollo - en producción usar servidor WSGI apropiado
+    app.run(debug=False, host='0.0.0.0', port=5000)

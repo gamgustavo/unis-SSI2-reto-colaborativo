@@ -1,0 +1,50 @@
+import pickle
+import base64
+import zlib
+from itsdangerous import URLSafeSerializer, BadSignature
+
+def reconstruct_session(session_cookie_bytes, secret_key, salt='session'):
+    """
+    Reconstruye un objeto de sesión a partir del valor de una cookie de sesión.
+
+    Args:
+        session_cookie_bytes (bytes): Valor de la cookie de sesión en bytes.
+        secret_key (str): Clave secreta usada para firmar la sesión.
+        salt (str): Sal para el serializador (por defecto 'session').
+
+    Returns:
+        dict: Objeto de sesión reconstruido.
+
+    Raises:
+        BadSignature: Si la firma de la sesión no es válida.
+        Exception: Si ocurre algún error durante la deserialización.
+    """
+    # Configurar el serializador seguro
+    serializer = URLSafeSerializer(secret_key, salt=salt)
+
+    try:
+        # Decodificar de base64 si es necesario (depende de cómo se guardó)
+        if session_cookie_bytes.startswith(b'.'):
+            # Formato común en Flask: .<base64>
+            session_data = session_cookie_bytes[1:]
+        else:
+            session_data = session_cookie_bytes
+
+        # Decodificar base64
+        decoded_data = base64.urlsafe_b64decode(session_data)
+
+        # Descomprimir si está comprimido (zlib)
+        try:
+            decompressed_data = zlib.decompress(decoded_data)
+        except zlib.error:
+            decompressed_data = decoded_data
+
+        # Verificar firma y cargar datos
+        session_dict = serializer.loads(decompressed_data.decode('utf-8'))
+
+        return session_dict
+
+    except BadSignature as e:
+        raise BadSignature("La firma de la sesión no es válida") from e
+    except Exception as e:
+        raise Exception(f"Error al reconstruir la sesión: {str(e)}") from e

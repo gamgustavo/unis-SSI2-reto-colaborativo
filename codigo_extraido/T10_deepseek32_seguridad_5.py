@@ -1,0 +1,230 @@
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+import socket
+import ipaddress
+
+app = Flask(__name__)
+
+# Lista de dominios/redes privadas bloqueadas
+PRIVATE_NETWORKS = [
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('169.254.0.0/16'),
+    ipaddress.ip_network('::1/128'),
+    ipaddress.ip_network('fc00::/7'),
+    ipaddress.ip_network('fe80::/10')
+]
+
+# Cabeceras por defecto para las peticiones
+DEFAULT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+}
+
+def is_valid_url(url):
+    """Valida que la URL tenga un formato correcto y seguro"""
+    try:
+        result = urlparse(url)
+        
+        # Verificar esquema permitido
+        if result.scheme not in ('http', 'https'):
+            return False, "Solo se permiten URLs HTTP/HTTPS"
+        
+        # Verificar que tenga host
+        if not result.netloc:
+            return False, "URL no válida: falta el host"
+        
+        # Verificar que no sea una IP privada
+        try:
+            ip = ipaddress.ip_address(result.hostname)
+            for network in PRIVATE_NETWORKS:
+                if ip in network:
+                    return False, "Acceso a redes privadas no permitido"
+        except ValueError:
+            # No es una IP, es un nombre de dominio
+            pass
+        
+        # Validar caracteres peligrosos
+        if re.search(r'[\x00-\x1f\x7f]', url):
+            return False, "URL contiene caracteres no permitidos"
+            
+        return True, "URL válida"
+    except Exception as e:
+        return False, f"Error validando URL: {str(e)}"
+
+def resolve_and_validate_host(hostname):
+    """Resuelve el hostname y valida que no apunte a IPs privadas"""
+    try:
+        # Resolver el hostname
+        ips = socket.getaddrinfo(hostname, None)
+        
+        for ip_info in ips:
+            ip_str = ip_info[4][0]
+            
+            # Convertir a objeto IP
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                
+                # Verificar si es una IP privada
+                for network in PRIVATE_NETWORKS:
+                    if ip in network:
+                        return False, f"Host resuelve a IP privada: {ip_str}"
+                        
+            except ValueError:
+                continue
+                
+        return True, "Host válido"
+    except socket.gaierror:
+        return False, "No se pudo resolver el hostname"
+    except Exception as e:
+        return False, f"Error validando host: {str(e)}"
+
+@app.route('/fetch-url', methods=['POST'])
+def fetch_url():
+    """
+    Endpoint para obtener el contenido de una URL
+    Requiere: JSON con clave 'url'
+    """
+    # Verificar que la petición sea JSON
+    if not request.is_json:
+        return jsonify({
+            'error': 'Content-Type debe ser application/json'
+        }), 400
+    
+    data = request.get_json()
+    
+    # Verificar que se proporcionó la URL
+    if 'url' not in data:
+        return jsonify({
+            'error': 'Se requiere el campo "url" en el JSON'
+        }), 400
+    
+    url = data['url'].strip()
+    
+    # Validar URL
+    is_valid, message = is_valid_url(url)
+    if not is_valid:
+        return jsonify({'error': message}), 400
+    
+    # Validar hostname
+    parsed_url = urlparse(url)
+    is_host_valid, host_message = resolve_and_validate_host(parsed_url.hostname)
+    if not is_host_valid:
+        return jsonify({'error': host_message}), 400
+    
+    try:
+        # Configurar timeout para evitar ataques de denegación de servicio
+        timeout = 10  # segundos
+        
+        # Realizar la petición con límites de tamaño
+        response = requests.get(
+            url,
+            headers=DEFAULT_HEADERS,
+            timeout=timeout,
+            stream=True,  # Stream para controlar el tamaño
+            verify=True,  # Verificar certificados SSL
+            allow_redirects=False  # Controlar redirecciones manualmente
+        )
+        
+        # Seguir redirecciones de forma controlada (máximo 5)
+        redirect_count = 0
+        while response.status_code in (301, 302, 303, 307, 308) and redirect_count < 5:
+            if 'Location' not in response.headers:
+                break
+            
+            redirect_url = response.headers['Location']
+            # Validar URL de redirección
+            is_valid_redirect, redirect_message = is_valid_url(redirect_url)
+            if not is_valid_redirect:
+                return jsonify({'error': f'Redirección no segura: {redirect_message}'}), 400
+            
+            response = requests.get(
+                redirect_url,
+                headers=DEFAULT_HEADERS,
+                timeout=timeout,
+                stream=True,
+                verify=True,
+                allow_redirects=False
+            )
+            redirect_count += 1
+        
+        if redirect_count >= 5:
+            return jsonify({'error': 'Demasiadas redirecciones'}), 400
+        
+        # Verificar código de estado
+        if response.status_code != 200:
+            return jsonify({
+                'error': f'Error al obtener la URL. Código: {response.status_code}'
+            }), 400
+        
+        # Limitar el tamaño de la respuesta (2MB máximo)
+        max_size = 2 * 1024 * 1024  # 2MB
+        content_length = response.headers.get('Content-Length')
+        
+        if content_length and int(content_length) > max_size:
+            return jsonify({
+                'error': f'El contenido excede el tamaño máximo permitido ({max_size} bytes)'
+            }), 400
+        
+        # Leer contenido con límite de tamaño
+        content_bytes = b''
+        for chunk in response.iter_content(chunk_size=8192):
+            content_bytes += chunk
+            if len(content_bytes) > max_size:
+                return jsonify({
+                    'error': f'El contenido excede el tamaño máximo permitido ({max_size} bytes)'
+                }), 400
+        
+        # Intentar decodificar como texto
+        try:
+            # Intentar detectar la codificación
+            content = content_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                # Intentar con latin-1 como fallback
+                content = content_bytes.decode('latin-1')
+            except UnicodeDecodeError:
+                # Si no se puede decodificar, devolver como base64
+                import base64
+                content = base64.b64encode(content_bytes).decode('ascii')
+                return jsonify({
+                    'content': content,
+                    'encoding': 'base64',
+                    'content_type': response.headers.get('Content-Type', 'application/octet-stream')
+                })
+        
+        return jsonify({
+            'content': content,
+            'encoding': 'utf-8',
+            'content_type': response.headers.get('Content-Type', 'text/html'),
+            'status_code': response.status_code,
+            'url': response.url
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Timeout al conectar con el servidor'}), 408
+    except requests.exceptions.SSLError:
+        return jsonify({'error': 'Error de certificado SSL'}), 400
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Error de conexión'}), 400
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Error en la petición: {str(e)}'}), 400
+    except Exception as e:
+        # Log del error interno (en producción usarías un logger)
+        app.logger.error(f"Error interno: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint no encontrado'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Método no permitido'}), 405
+
+if __name__ == '__main__':
+    # En producción, usar un servidor WSGI como Gunicorn
+    app.run(debug=False, host='0.0.0.0', port=5000)

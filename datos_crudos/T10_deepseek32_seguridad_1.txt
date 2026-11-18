@@ -1,0 +1,191 @@
+```python
+from flask import Flask, request, jsonify
+import requests
+import validators
+from urllib.parse import urlparse
+import re
+
+app = Flask(__name__)
+
+# Configuración de seguridad
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+TIMEOUT = 10  # segundos
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB máximo
+
+def is_safe_url(url):
+    """Valida que la URL sea segura para acceder"""
+    if not validators.url(url):
+        return False
+    
+    parsed = urlparse(url)
+    
+    # Validar esquema permitido
+    if parsed.scheme not in ['http', 'https']:
+        return False
+    
+    # Prevenir acceso a localhost/red interna
+    localhost_indicators = [
+        'localhost',
+        '127.0.0.1',
+        '::1',
+        '0.0.0.0',
+        '192.168.',
+        '10.',
+        '172.16.',
+        '172.17.',
+        '172.18.',
+        '172.19.',
+        '172.20.',
+        '172.21.',
+        '172.22.',
+        '172.23.',
+        '172.24.',
+        '172.25.',
+        '172.26.',
+        '172.27.',
+        '172.28.',
+        '172.29.',
+        '172.30.',
+        '172.31.',
+        '169.254.'
+    ]
+    
+    hostname = parsed.hostname or ''
+    for indicator in localhost_indicators:
+        if hostname.startswith(indicator):
+            return False
+    
+    # Validar formato del hostname
+    if not re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', hostname):
+        return False
+    
+    return True
+
+@app.route('/fetch', methods=['POST'])
+def fetch_url():
+    """
+    Endpoint para obtener contenido de una URL
+    Requiere: {'url': 'https://ejemplo.com'}
+    """
+    # Validar que la solicitud sea JSON
+    if not request.is_json:
+        return jsonify({'error': 'Content-Type debe ser application/json'}), 400
+    
+    data = request.get_json()
+    
+    # Validar que se proporcionó la URL
+    if not data or 'url' not in data:
+        return jsonify({'error': 'Se requiere el parámetro "url"'}), 400
+    
+    url = data['url'].strip()
+    
+    # Validar URL
+    if not is_safe_url(url):
+        return jsonify({'error': 'URL no válida o no permitida'}), 400
+    
+    try:
+        # Configurar headers para la solicitud
+        headers = {
+            'User-Agent': USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'close'  # Evitar conexiones persistentes
+        }
+        
+        # Realizar la solicitud con límites de seguridad
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=TIMEOUT,
+            stream=True,  # Stream para controlar el tamaño
+            verify=True  # Verificar certificados SSL
+        )
+        
+        # Verificar código de estado
+        response.raise_for_status()
+        
+        # Leer contenido con límite de tamaño
+        content_length = 0
+        chunks = []
+        
+        for chunk in response.iter_content(chunk_size=8192):
+            content_length += len(chunk)
+            if content_length > MAX_CONTENT_LENGTH:
+                return jsonify({'error': 'El contenido excede el tamaño máximo permitido'}), 413
+            chunks.append(chunk)
+        
+        content = b''.join(chunks)
+        
+        # Determinar el tipo de contenido
+        content_type = response.headers.get('Content-Type', 'text/html')
+        
+        # Decodificar si es texto
+        if 'text' in content_type.lower():
+            try:
+                # Intentar detectar la codificación
+                encoding = response.encoding if response.encoding else 'utf-8'
+                decoded_content = content.decode(encoding, errors='replace')
+            except UnicodeDecodeError:
+                # Si falla la decodificación, usar utf-8 con reemplazo
+                decoded_content = content.decode('utf-8', errors='replace')
+            
+            return jsonify({
+                'url': url,
+                'content': decoded_content,
+                'content_type': content_type,
+                'status_code': response.status_code,
+                'headers': dict(response.headers)
+            })
+        else:
+            # Para contenido binario, devolver en base64
+            import base64
+            encoded_content = base64.b64encode(content).decode('ascii')
+            return jsonify({
+                'url': url,
+                'content': encoded_content,
+                'content_type': content_type,
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'encoding': 'base64'
+            })
+            
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Timeout al conectar con la URL'}), 408
+    except requests.exceptions.SSLError:
+        return jsonify({'error': 'Error de SSL/TLS'}), 400
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Error de conexión'}), 502
+    except requests.exceptions.HTTPError as e:
+        return jsonify({'error': f'Error HTTP: {str(e)}'}), e.response.status_code if e.response else 502
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Error en la solicitud: {str(e)}'}), 500
+    except Exception as e:
+        # Loggear el error interno (en producción usar logging)
+        app.logger.error(f'Error interno: {str(e)}')
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint no encontrado'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Método no permitido'}), 405
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'Payload demasiado grande'}), 413
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({'error': 'Error interno del servidor'}), 500
+
+if __name__ == '__main__':
+    # Configuración de seguridad para el servidor de desarrollo
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024  # 1MB máximo para solicitudes
+    
+    # Solo para desarrollo - en producción usar WSGI como gunicorn
+    app.run(host='127.0.0.1', port=5000, debug=False)
+```

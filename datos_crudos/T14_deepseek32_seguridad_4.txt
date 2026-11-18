@@ -1,0 +1,300 @@
+```python
+import requests
+import json
+import os
+import sys
+from typing import Dict, Any, Optional
+import logging
+from urllib.parse import urljoin
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+class SecureAPIClient:
+    """Cliente seguro para consumir APIs HTTPS con autenticación por token"""
+    
+    def __init__(self, base_url: str, timeout: int = 30):
+        """
+        Inicializa el cliente API seguro.
+        
+        Args:
+            base_url: URL base de la API
+            timeout: Tiempo máximo de espera en segundos (default: 30)
+        """
+        if not base_url.startswith('https://'):
+            raise ValueError("La URL debe usar HTTPS para mayor seguridad")
+            
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.session = requests.Session()
+        
+        # Configurar headers de seguridad por defecto
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'SecureAPIClient/1.0'
+        })
+        
+        # Configurar verificación SSL estricta
+        self.session.verify = True
+        
+        # Configurar redirecciones seguras (máximo 5)
+        self.session.max_redirects = 5
+        
+        logger.info(f"Cliente API inicializado para: {self.base_url}")
+    
+    def _get_token(self) -> str:
+        """
+        Obtiene el token de autenticación de forma segura.
+        
+        Returns:
+            Token de autenticación
+            
+        Raises:
+            EnvironmentError: Si el token no está configurado
+        """
+        # Prioridad de fuentes del token (de más a menos segura):
+        # 1. Variable de entorno
+        # 2. Archivo de configuración seguro
+        # 3. Input interactivo (solo para desarrollo)
+        
+        token = os.environ.get('API_TOKEN')
+        
+        if not token:
+            # Intentar leer de archivo seguro (solo si existe)
+            token_file = os.path.expanduser('~/.api_token')
+            if os.path.exists(token_file):
+                try:
+                    with open(token_file, 'r') as f:
+                        token = f.read().strip()
+                except (IOError, PermissionError) as e:
+                    logger.warning(f"No se pudo leer el archivo de token: {e}")
+        
+        if not token:
+            raise EnvironmentError(
+                "Token no encontrado. Configure la variable de entorno API_TOKEN "
+                "o el archivo ~/.api_token"
+            )
+        
+        # Validar formato básico del token
+        if len(token) < 10:
+            raise ValueError("Token demasiado corto")
+            
+        return token
+    
+    def _validate_response(self, response: requests.Response) -> Dict[str, Any]:
+        """
+        Valida la respuesta de la API de forma segura.
+        
+        Args:
+            response: Objeto Response de requests
+            
+        Returns:
+            Datos JSON parseados
+            
+        Raises:
+            requests.exceptions.HTTPError: Para errores HTTP
+            ValueError: Para respuestas inválidas
+        """
+        try:
+            # Verificar estado HTTP
+            response.raise_for_status()
+            
+            # Validar headers de seguridad
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' not in content_type:
+                logger.warning(f"Content-Type inesperado: {content_type}")
+            
+            # Parsear JSON de forma segura
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"Error al parsear JSON: {e}")
+                raise ValueError(f"Respuesta JSON inválida: {e}")
+            
+            # Validar tamaño de respuesta (límite de 10MB)
+            content_length = len(response.content)
+            if content_length > 10 * 1024 * 1024:  # 10MB
+                logger.warning(f"Respuesta muy grande: {content_length} bytes")
+            
+            return data
+            
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Error HTTP {response.status_code}: {e}")
+            
+            # Log seguro (sin exponer datos sensibles)
+            safe_headers = {k: v for k, v in response.headers.items() 
+                          if k.lower() not in ['authorization', 'cookie', 'set-cookie']}
+            
+            logger.debug(f"Headers de respuesta: {safe_headers}")
+            
+            # Intentar obtener mensaje de error del cuerpo si existe
+            try:
+                error_data = response.json()
+                logger.error(f"Datos de error: {error_data}")
+            except:
+                pass
+                
+            raise
+    
+    def _sanitize_url(self, endpoint: str) -> str:
+        """
+        Sanitiza la URL para prevenir inyecciones.
+        
+        Args:
+            endpoint: Endpoint de la API
+            
+        Returns:
+            URL sanitizada
+        """
+        # Eliminar espacios y caracteres peligrosos
+        endpoint = endpoint.strip().lstrip('/')
+        
+        # Validar que el endpoint no contenga caracteres peligrosos
+        dangerous_chars = ['..', '//', '\\']
+        for char in dangerous_chars:
+            if char in endpoint:
+                raise ValueError(f"Endpoint contiene caracteres peligrosos: {char}")
+        
+        return urljoin(f"{self.base_url}/", endpoint)
+    
+    def make_request(self, 
+                    method: str, 
+                    endpoint: str, 
+                    data: Optional[Dict[str, Any]] = None,
+                    params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Realiza una petición segura a la API.
+        
+        Args:
+            method: Método HTTP (GET, POST, PUT, DELETE, etc.)
+            endpoint: Endpoint de la API
+            data: Datos para el cuerpo de la petición (para POST/PUT)
+            params: Parámetros de query string
+            
+        Returns:
+            Respuesta JSON de la API
+            
+        Raises:
+            requests.exceptions.RequestException: Para errores de red/HTTP
+            ValueError: Para argumentos inválidos
+        """
+        # Validar método HTTP
+        valid_methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+        if method.upper() not in valid_methods:
+            raise ValueError(f"Método HTTP inválido. Use uno de: {valid_methods}")
+        
+        # Sanitizar URL
+        url = self._sanitize_url(endpoint)
+        
+        # Obtener token de forma segura
+        token = self._get_token()
+        
+        # Configurar headers de autenticación
+        headers = {'Authorization': f'Bearer {token}'}
+        
+        # Preparar datos
+        json_data = None
+        if data is not None:
+            if not isinstance(data, dict):
+                raise ValueError("Los datos deben ser un diccionario")
+            json_data = json.dumps(data)
+        
+        logger.info(f"Realizando petición {method} a {endpoint}")
+        
+        try:
+            # Realizar petición con timeout y verificación SSL
+            response = self.session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=data,  # requests se encarga de serializar a JSON
+                params=params,
+                timeout=self.timeout,
+                allow_redirects=True
+            )
+            
+            # Validar y procesar respuesta
+            return self._validate_response(response)
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout al conectar con {url}")
+            raise
+        except requests.exceptions.SSLError as e:
+            logger.error(f"Error SSL: {e}")
+            raise
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Error de conexión: {e}")
+            raise
+        except requests.exceptions.TooManyRedirects:
+            logger.error(f"Demasiadas redirecciones para {url}")
+            raise
+        finally:
+            # Limpiar datos sensibles de memoria
+            if 'token' in locals():
+                del token
+            if 'headers' in locals() and 'Authorization' in headers:
+                headers['Authorization'] = '[REDACTED]'
+    
+    def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Realiza una petición GET segura."""
+        return self.make_request('GET', endpoint, params=params)
+    
+    def post(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Realiza una petición POST segura."""
+        return self.make_request('POST', endpoint, data=data)
+    
+    def close(self):
+        """Cierra la sesión de forma segura."""
+        if self.session:
+            self.session.close()
+            logger.info("Sesión API cerrada")
+    
+    def __enter__(self):
+        """Soporte para context manager."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Garantiza el cierre seguro de la sesión."""
+        self.close()
+
+
+def main():
+    """Ejemplo de uso del cliente seguro."""
+    try:
+        # Ejemplo de uso - reemplazar con tu URL y endpoint real
+        BASE_URL = "https://api.ejemplo.com/v1"
+        ENDPOINT = "/datos"
+        
+        # El token debe estar en la variable de entorno API_TOKEN
+        # o en el archivo ~/.api_token
+        
+        with SecureAPIClient(BASE_URL) as client:
+            # Ejemplo de petición GET
+            response_data = client.get(ENDPOINT)
+            
+            # Procesar respuesta
+            print("Respuesta recibida:")
+            print(json.dumps(response_data, indent=2, ensure_ascii=False))
+            
+            return response_data
+            
+    except EnvironmentError as e:
+        logger.error(f"Error de configuración: {e}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error de petición: {e}")
+        sys.exit(1)
+    except ValueError as e:
+        logger.error(f"Error de validación: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error inesperado: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+```

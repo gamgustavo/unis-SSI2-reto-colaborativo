@@ -1,0 +1,22 @@
+import requests
+
+def consumir_api(url, token):
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/json'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Verifica si la respuesta tiene un código de error
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Ocurrió un error: {e}")
+        return None
+
+# Ejemplo de uso
+url_api = 'https://api.ejemplo.com/datos'
+token_api = 'tu_token_aqui'
+respuesta = consumir_api(url_api, token_api)
+if respuesta:
+    print(respuesta)

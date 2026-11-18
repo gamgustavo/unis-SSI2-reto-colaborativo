@@ -1,0 +1,274 @@
+```python
+import os
+import sqlite3
+import hashlib
+import secrets
+import re
+from typing import Tuple, Optional
+from functools import wraps
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# Configuración segura de la base de datos
+DATABASE = 'secure_users.db'
+PEPPER = os.getenv('PEPPER', secrets.token_hex(32))  # Variable de entorno para el pepper
+ITERATIONS = 100000  # Número de iteraciones para PBKDF2
+
+def init_db():
+    """Inicializa la base de datos con tablas seguras"""
+    with sqlite3.connect(DATABASE) as conn:
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            iterations INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP,
+            failed_attempts INTEGER DEFAULT 0,
+            account_locked BOOLEAN DEFAULT FALSE
+        )
+        ''')
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used BOOLEAN DEFAULT FALSE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        ''')
+        conn.commit()
+
+def get_db_connection():
+    """Crea una conexión segura a la base de datos"""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def hash_password(password: str, salt: str = None) -> Tuple[str, str]:
+    """
+    Genera un hash seguro de la contraseña usando PBKDF2-HMAC-SHA256
+    con salt aleatorio y pepper de entorno
+    """
+    if salt is None:
+        salt = secrets.token_hex(16)
+
+    # Combina la contraseña con el pepper
+    peppered_password = password + PEPPER
+
+    # Genera el hash con PBKDF2
+    password_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        peppered_password.encode('utf-8'),
+        salt.encode('utf-8'),
+        ITERATIONS
+    ).hex()
+
+    return password_hash, salt
+
+def verify_password(stored_hash: str, stored_salt: str, input_password: str) -> bool:
+    """
+    Verifica si la contraseña proporcionada coincide con el hash almacenado
+    """
+    # Genera el hash de la contraseña proporcionada con el mismo salt
+    input_hash, _ = hash_password(input_password, stored_salt)
+
+    # Comparación segura en tiempo constante
+    return secrets.compare_digest(stored_hash, input_hash)
+
+def validate_password_strength(password: str) -> bool:
+    """
+    Valida la fortaleza de la contraseña según políticas de seguridad
+    """
+    if len(password) < 12:
+        return False
+    if not re.search(r'[A-Z]', password):
+        return False
+    if not re.search(r'[a-z]', password):
+        return False
+    if not re.search(r'[0-9]', password):
+        return False
+    if not re.search(r'[^A-Za-z0-9]', password):
+        return False
+    return True
+
+def rate_limit(f):
+    """Decorador para limitar intentos de login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        ip = request.remote_addr
+        # Implementación simplificada de rate limiting
+        # En producción, usar una solución como Redis
+        if not hasattr(decorated_function, 'attempts'):
+            decorated_function.attempts = {}
+
+        if ip in decorated_function.attempts:
+            if decorated_function.attempts[ip] >= 5:
+                return jsonify({'error': 'Too many attempts. Try again later.'}), 429
+        else:
+            decorated_function.attempts[ip] = 0
+
+        decorated_function.attempts[ip] += 1
+        return f(*args, **kwargs)
+    return decorated_function
+
+def lock_account_after_failed_attempts(user_id: int):
+    """Bloquea la cuenta después de varios intentos fallidos"""
+    with get_db_connection() as conn:
+        conn.execute(
+            'UPDATE users SET account_locked = TRUE WHERE id = ? AND failed_attempts >= 5',
+            (user_id,)
+        )
+        conn.commit()
+
+@app.route('/register', methods=['POST'])
+def register_user():
+    """Endpoint seguro para registrar nuevos usuarios"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    # Validaciones básicas
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    if len(username) < 4 or len(username) > 32:
+        return jsonify({'error': 'Username must be between 4 and 32 characters'}), 400
+
+    if not validate_password_strength(password):
+        return jsonify({
+            'error': 'Password must be at least 12 characters long and contain '
+                    'uppercase, lowercase, numbers, and special characters'
+        }), 400
+
+    # Verificar si el usuario ya existe
+    with get_db_connection() as conn:
+        existing_user = conn.execute(
+            'SELECT id FROM users WHERE username = ?',
+            (username,)
+        ).fetchone()
+
+        if existing_user:
+            return jsonify({'error': 'Username already exists'}), 409
+
+        # Generar hash seguro de la contraseña
+        password_hash, salt = hash_password(password)
+
+        # Insertar nuevo usuario
+        try:
+            conn.execute(
+                'INSERT INTO users (username, password_hash, salt, iterations) VALUES (?, ?, ?, ?)',
+                (username, password_hash, salt, ITERATIONS)
+            )
+            conn.commit()
+            return jsonify({'message': 'User registered successfully'}), 201
+        except sqlite3.IntegrityError:
+            return jsonify({'error': 'Username already exists'}), 409
+
+@app.route('/login', methods=['POST'])
+@rate_limit
+def login_user():
+    """Endpoint seguro para autenticación de usuarios"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    with get_db_connection() as conn:
+        user = conn.execute(
+            'SELECT id, password_hash, salt, failed_attempts, account_locked FROM users WHERE username = ?',
+            (username,)
+        ).fetchone()
+
+        if not user:
+            # Simular tiempo de procesamiento para evitar timing attacks
+            hash_password(password)
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+        if user['account_locked']:
+            return jsonify({'error': 'Account locked due to too many failed attempts'}), 403
+
+        if verify_password(user['password_hash'], user['salt'], password):
+            # Reset failed attempts on successful login
+            conn.execute(
+                'UPDATE users SET failed_attempts = 0, last_login = CURRENT_TIMESTAMP WHERE id = ?',
+                (user['id'],)
+            )
+            conn.commit()
+            return jsonify({'message': 'Login successful'}), 200
+        else:
+            # Increment failed attempts
+            conn.execute(
+                'UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ?',
+                (user['id'],)
+            )
+            conn.commit()
+
+            # Bloquear cuenta si hay demasiados intentos
+            if user['failed_attempts'] + 1 >= 5:
+                lock_account_after_failed_attempts(user['id'])
+
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+@app.route('/change_password', methods=['POST'])
+def change_password():
+    """Endpoint seguro para cambiar contraseña"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    username = data.get('username', '').strip()
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not username or not current_password or not new_password:
+        return jsonify({'error': 'All fields are required'}), 400
+
+    if not validate_password_strength(new_password):
+        return jsonify({
+            'error': 'New password must be at least 12 characters long and contain '
+                    'uppercase, lowercase, numbers, and special characters'
+        }), 400
+
+    with get_db_connection() as conn:
+        user = conn.execute(
+            'SELECT id, password_hash, salt FROM users WHERE username = ?',
+            (username,)
+        ).fetchone()
+
+        if not user:
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+        if not verify_password(user['password_hash'], user['salt'], current_password):
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+        # Generar nuevo hash para la nueva contraseña
+        new_password_hash, new_salt = hash_password(new_password)
+
+        # Actualizar contraseña
+        conn.execute(
+            'UPDATE users SET password_hash = ?, salt = ?, iterations = ? WHERE id = ?',
+            (new_password_hash, new_salt, ITERATIONS, user['id'])
+        )
+        conn.commit()
+
+        return jsonify({'message': 'Password changed successfully'}), 200
+
+if __name__ == '__main__':
+    init_db()
+    # Configuración segura de Flask
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
+    app.run(ssl_context='adhoc', host='0.0.0.0', port=5000)
+```

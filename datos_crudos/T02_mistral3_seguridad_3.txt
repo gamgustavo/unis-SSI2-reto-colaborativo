@@ -1,0 +1,73 @@
+```python
+import subprocess
+import re
+import shlex
+import sys
+
+def is_valid_hostname(hostname: str) -> bool:
+    """Check if the hostname is valid and safe to use in a shell command."""
+    if not hostname:
+        return False
+    # Basic regex to validate hostname (simplified, not exhaustive)
+    if len(hostname) > 253:
+        return False
+    if hostname[-1] == ".":
+        hostname = hostname[:-1]  # Strip trailing dot for validation
+    allowed = re.compile(r"(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
+    return all(allowed.match(x) for x in hostname.split("."))
+
+def ping_host(hostname: str) -> bool:
+    """
+    Ping a host and return True if it responds, False otherwise.
+    Uses subprocess with safe argument handling to avoid shell injection.
+    """
+    if not is_valid_hostname(hostname):
+        raise ValueError("Invalid hostname provided")
+
+    try:
+        # Use platform-specific ping command with safe argument handling
+        if sys.platform.startswith('win'):
+            command = ['ping', '-n', '1', '-w', '1000', hostname]
+        else:
+            command = ['ping', '-c', '1', '-W', '1', hostname]
+
+        # Run the command with subprocess, avoiding shell=True
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+
+        # Check if the ping was successful (return code 0)
+        return result.returncode == 0
+
+    except subprocess.SubprocessError as e:
+        print(f"Error executing ping command: {e}", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        return False
+
+def main():
+    """Main function to get user input and execute ping."""
+    try:
+        hostname = input("Enter the hostname or IP address to ping: ").strip()
+        if not hostname:
+            print("Error: No hostname provided", file=sys.stderr)
+            return
+
+        if ping_host(hostname):
+            print(f"Host {hostname} is responding to ping.")
+        else:
+            print(f"Host {hostname} is not responding to ping.")
+
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.", file=sys.stderr)
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+```

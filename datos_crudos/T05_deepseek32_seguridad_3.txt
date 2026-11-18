@@ -1,0 +1,399 @@
+```python
+import hashlib
+import secrets
+import sqlite3
+import re
+from typing import Optional, Tuple
+from datetime import datetime, timedelta
+
+class PasswordSecurity:
+    """Clase para manejar la seguridad de contraseñas"""
+    
+    @staticmethod
+    def hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[bytes, bytes]:
+        """
+        Hashea una contraseña usando PBKDF2 con SHA-256
+        
+        Args:
+            password: Contraseña en texto plano
+            salt: Salt opcional (se genera uno nuevo si es None)
+            
+        Returns:
+            Tuple con (hash, salt)
+        """
+        if salt is None:
+            salt = secrets.token_bytes(32)
+        
+        # Usar PBKDF2 con 100,000 iteraciones (ajustable según necesidades)
+        hash_obj = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt,
+            100000,
+            dklen=32
+        )
+        return hash_obj, salt
+    
+    @staticmethod
+    def verify_password(stored_hash: bytes, stored_salt: bytes, password: str) -> bool:
+        """
+        Verifica una contraseña contra el hash almacenado
+        
+        Args:
+            stored_hash: Hash almacenado en la base de datos
+            stored_salt: Salt almacenado en la base de datos
+            password: Contraseña a verificar
+            
+        Returns:
+            True si la contraseña es válida, False en caso contrario
+        """
+        new_hash, _ = PasswordSecurity.hash_password(password, stored_salt)
+        return secrets.compare_digest(stored_hash, new_hash)
+    
+    @staticmethod
+    def validate_password_strength(password: str) -> Tuple[bool, str]:
+        """
+        Valida la fortaleza de una contraseña
+        
+        Args:
+            password: Contraseña a validar
+            
+        Returns:
+            Tuple con (es_válida, mensaje_error)
+        """
+        if len(password) < 12:
+            return False, "La contraseña debe tener al menos 12 caracteres"
+        
+        if len(password) > 128:
+            return False, "La contraseña no puede exceder los 128 caracteres"
+        
+        # Verificar complejidad
+        checks = {
+            'minúscula': r'[a-z]',
+            'mayúscula': r'[A-Z]',
+            'dígito': r'\d',
+            'especial': r'[!@#$%^&*(),.?":{}|<>]'
+        }
+        
+        missing = []
+        for check_name, pattern in checks.items():
+            if not re.search(pattern, password):
+                missing.append(check_name)
+        
+        if missing:
+            return False, f"La contraseña debe contener: {', '.join(missing)}"
+        
+        # Verificar contraseñas comunes (lista reducida para ejemplo)
+        common_passwords = {'password123', '1234567890', 'qwertyuiop'}
+        if password.lower() in common_passwords:
+            return False, "La contraseña es demasiado común"
+        
+        return True, "Contraseña válida"
+
+class UserDatabase:
+    """Clase para manejar la base de datos de usuarios"""
+    
+    def __init__(self, db_path: str = "users.db"):
+        """
+        Inicializa la conexión a la base de datos
+        
+        Args:
+            db_path: Ruta al archivo de base de datos
+        """
+        self.db_path = db_path
+        self.init_database()
+    
+    def init_database(self):
+        """Inicializa la estructura de la base de datos"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Tabla de usuarios
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash BLOB NOT NULL,
+                    password_salt BLOB NOT NULL,
+                    email TEXT UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    failed_attempts INTEGER DEFAULT 0,
+                    locked_until TIMESTAMP,
+                    is_active BOOLEAN DEFAULT 1
+                )
+            ''')
+            
+            # Índices para mejorar el rendimiento
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_username ON users(username)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_email ON users(email)')
+            
+            conn.commit()
+    
+    def register_user(self, username: str, password: str, email: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Registra un nuevo usuario
+        
+        Args:
+            username: Nombre de usuario
+            password: Contraseña
+            email: Email opcional
+            
+        Returns:
+            Tuple con (éxito, mensaje)
+        """
+        # Validar entrada
+        if not username or not password:
+            return False, "Usuario y contraseña son requeridos"
+        
+        if len(username) < 3 or len(username) > 50:
+            return False, "El usuario debe tener entre 3 y 50 caracteres"
+        
+        # Validar formato de email si se proporciona
+        if email:
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, email):
+                return False, "Formato de email inválido"
+        
+        # Validar fortaleza de contraseña
+        is_valid, message = PasswordSecurity.validate_password_strength(password)
+        if not is_valid:
+            return False, message
+        
+        # Verificar si el usuario ya existe
+        if self.user_exists(username, email):
+            return False, "El usuario o email ya existen"
+        
+        # Hashear la contraseña
+        password_hash, password_salt = PasswordSecurity.hash_password(password)
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    INSERT INTO users (username, password_hash, password_salt, email)
+                    VALUES (?, ?, ?, ?)
+                ''', (username, password_hash, password_salt, email))
+                
+                conn.commit()
+                return True, "Usuario registrado exitosamente"
+                
+        except sqlite3.IntegrityError:
+            return False, "El usuario o email ya existen"
+        except Exception as e:
+            return False, f"Error al registrar usuario: {str(e)}"
+    
+    def verify_user(self, username: str, password: str) -> Tuple[bool, str]:
+        """
+        Verifica las credenciales de un usuario
+        
+        Args:
+            username: Nombre de usuario
+            password: Contraseña
+            
+        Returns:
+            Tuple con (éxito, mensaje)
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # Obtener información del usuario
+                cursor.execute('''
+                    SELECT id, username, password_hash, password_salt, 
+                           failed_attempts, locked_until, is_active
+                    FROM users 
+                    WHERE username = ? OR email = ?
+                ''', (username, username))
+                
+                user_data = cursor.fetchone()
+                
+                if not user_data:
+                    # Usuario no encontrado - simular tiempo de verificación
+                    secrets.token_bytes(32)  # Operación costosa para timing attacks
+                    return False, "Credenciales inválidas"
+                
+                # Verificar si la cuenta está bloqueada
+                if user_data['locked_until']:
+                    locked_until = datetime.fromisoformat(user_data['locked_until'])
+                    if datetime.now() < locked_until:
+                        remaining = locked_until - datetime.now()
+                        return False, f"Cuenta bloqueada. Intente nuevamente en {remaining.seconds} segundos"
+                
+                # Verificar si la cuenta está activa
+                if not user_data['is_active']:
+                    return False, "Cuenta desactivada"
+                
+                # Verificar contraseña
+                is_valid = PasswordSecurity.verify_password(
+                    user_data['password_hash'],
+                    user_data['password_salt'],
+                    password
+                )
+                
+                if is_valid:
+                    # Restablecer intentos fallidos y actualizar último login
+                    cursor.execute('''
+                        UPDATE users 
+                        SET failed_attempts = 0, 
+                            locked_until = NULL,
+                            last_login = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    ''', (user_data['id'],))
+                    conn.commit()
+                    return True, "Inicio de sesión exitoso"
+                else:
+                    # Incrementar intentos fallidos
+                    failed_attempts = user_data['failed_attempts'] + 1
+                    
+                    # Bloquear cuenta después de 5 intentos fallidos por 15 minutos
+                    if failed_attempts >= 5:
+                        locked_until = datetime.now() + timedelta(minutes=15)
+                        cursor.execute('''
+                            UPDATE users 
+                            SET failed_attempts = ?,
+                                locked_until = ?
+                            WHERE id = ?
+                        ''', (failed_attempts, locked_until.isoformat(), user_data['id']))
+                        conn.commit()
+                        return False, "Demasiados intentos fallidos. Cuenta bloqueada por 15 minutos"
+                    else:
+                        cursor.execute('''
+                            UPDATE users 
+                            SET failed_attempts = ?
+                            WHERE id = ?
+                        ''', (failed_attempts, user_data['id']))
+                        conn.commit()
+                        return False, "Credenciales inválidas"
+                        
+        except Exception as e:
+            return False, f"Error al verificar usuario: {str(e)}"
+    
+    def user_exists(self, username: str, email: Optional[str] = None) -> bool:
+        """
+        Verifica si un usuario o email ya existen
+        
+        Args:
+            username: Nombre de usuario
+            email: Email
+            
+        Returns:
+            True si existe, False en caso contrario
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                if email:
+                    cursor.execute('''
+                        SELECT COUNT(*) FROM users 
+                        WHERE username = ? OR email = ?
+                    ''', (username, email))
+                else:
+                    cursor.execute('''
+                        SELECT COUNT(*) FROM users 
+                        WHERE username = ?
+                    ''', (username,))
+                
+                count = cursor.fetchone()[0]
+                return count > 0
+                
+        except Exception:
+            return False
+    
+    def change_password(self, username: str, old_password: str, new_password: str) -> Tuple[bool, str]:
+        """
+        Cambia la contraseña de un usuario
+        
+        Args:
+            username: Nombre de usuario
+            old_password: Contraseña actual
+            new_password: Nueva contraseña
+            
+        Returns:
+            Tuple con (éxito, mensaje)
+        """
+        # Verificar credenciales actuales
+        success, message = self.verify_user(username, old_password)
+        if not success:
+            return False, "Contraseña actual incorrecta"
+        
+        # Validar nueva contraseña
+        is_valid, message = PasswordSecurity.validate_password_strength(new_password)
+        if not is_valid:
+            return False, f"Nueva contraseña inválida: {message}"
+        
+        # Evitar reutilización de contraseña (simplificado)
+        if old_password == new_password:
+            return False, "La nueva contraseña debe ser diferente a la anterior"
+        
+        # Generar nuevo hash
+        new_hash, new_salt = PasswordSecurity.hash_password(new_password)
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    UPDATE users 
+                    SET password_hash = ?, password_salt = ?, failed_attempts = 0
+                    WHERE username = ?
+                ''', (new_hash, new_salt, username))
+                
+                conn.commit()
+                return True, "Contraseña cambiada exitosamente"
+                
+        except Exception as e:
+            return False, f"Error al cambiar contraseña: {str(e)}"
+
+# Funciones de interfaz para uso externo
+def registrar_usuario(username: str, password: str, email: Optional[str] = None) -> Tuple[bool, str]:
+    """
+    Función pública para registrar un nuevo usuario
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña
+        email: Email opcional
+        
+    Returns:
+        Tuple con (éxito, mensaje)
+    """
+    db = UserDatabase()
+    return db.register_user(username, password, email)
+
+def verificar_usuario(username: str, password: str) -> Tuple[bool, str]:
+    """
+    Función pública para verificar credenciales de usuario
+    
+    Args:
+        username: Nombre de usuario o email
+        password: Contraseña
+        
+    Returns:
+        Tuple con (éxito, mensaje)
+    """
+    db = UserDatabase()
+    return db.verify_user(username, password)
+
+def cambiar_contraseña(username: str, old_password: str, new_password: str) -> Tuple[bool, str]:
+    """
+    Función pública para cambiar la contraseña de un usuario
+    
+    Args:
+        username: Nombre de usuario
+        old_password: Contraseña actual
+        new_password: Nueva contraseña
+        
+    Returns:
+        Tuple con (éxito, mensaje)
+    """
+    db = UserDatabase()
+    return db.change_password(username, old_password, new_password)
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Ejemplo de registro
+    print("===

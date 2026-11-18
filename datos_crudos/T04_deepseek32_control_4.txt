@@ -1,0 +1,41 @@
+```python
+import psycopg2
+from psycopg2 import OperationalError
+
+def listar_clientes():
+    try:
+        # Establecer conexión con la base de datos
+        connection = psycopg2.connect(
+            host="localhost",
+            database="tu_base_de_datos",
+            user="tu_usuario",
+            password="tu_contraseña",
+            port="5432"
+        )
+        
+        cursor = connection.cursor()
+        
+        # Ejecutar consulta para obtener todas las filas de la tabla clientes
+        cursor.execute("SELECT * FROM clientes;")
+        
+        # Obtener todos los resultados
+        clientes = cursor.fetchall()
+        
+        # Mostrar los resultados
+        print("Filas de la tabla 'clientes':")
+        print("-" * 50)
+        for cliente in clientes:
+            print(cliente)
+        
+        # Cerrar cursor y conexión
+        cursor.close()
+        connection.close()
+        
+    except OperationalError as e:
+        print(f"Error al conectar a la base de datos: {e}")
+    except Exception as e:
+        print(f"Error inesperado: {e}")
+
+if __name__ == "__main__":
+    listar_clientes()
+```

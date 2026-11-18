@@ -1,0 +1,52 @@
+```python
+import os
+from flask import Flask, jsonify
+from flask_talisman import Talisman
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app = Flask(__name__)
+
+# Configuración segura
+app.config.update(
+    SECRET_KEY=os.urandom(24),  # Clave secreta aleatoria para sesiones
+    SESSION_COOKIE_SECURE=True,  # Solo enviar cookies sobre HTTPS
+    SESSION_COOKIE_HTTPONLY=True,  # Evitar acceso a cookies desde JavaScript
+    SESSION_COOKIE_SAMESITE='Lax',  # Protección contra CSRF
+    PERMANENT_SESSION_LIFETIME=1800,  # Sesiones expiran en 30 minutos
+)
+
+# Middleware para seguridad
+Talisman(
+    app,
+    force_https=True,  # Redirigir HTTP a HTTPS
+    strict_transport_security=True,  # HSTS
+    session_cookie_secure=True,  # Cookies solo sobre HTTPS
+    content_security_policy={  # CSP para mitigar XSS
+        'default-src': "'self'",
+        'script-src': "'self'",
+        'style-src': "'self'",
+        'img-src': "'self' data:",
+    }
+)
+
+# Middleware para manejar correctamente headers detrás de proxies
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+@app.route('/')
+def home():
+    """Ruta de inicio segura."""
+    return jsonify({
+        'status': 'success',
+        'message': 'Bienvenido a la aplicación Flask segura',
+        'data': None
+    }), 200
+
+if __name__ == '__main__':
+    # Configuración para producción (usar Waitress, Gunicorn, etc. en producción real)
+    app.run(
+        host='0.0.0.0',
+        port=int(os.environ.get('PORT', 5000)),
+        ssl_context='adhoc' if os.environ.get('FLASK_ENV') == 'development' else None,
+        debug=False  # Nunca habilitar debug en producción
+    )
+```

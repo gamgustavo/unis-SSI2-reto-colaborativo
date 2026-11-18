@@ -1,0 +1,25 @@
+import pickle
+import hmac
+import hashlib
+import base64
+from typing import Optional, Dict
+
+SECRET_KEY = 'your-secret-key'  # Cambia esto por una clave secreta segura
+
+def reconstruct_session(cookie_value: bytes) -> Optional[Dict]:
+    try:
+        # Verificar la integridad del valor de la cookie usando HMAC
+        received_hmac, encoded_session = cookie_value.split(b':', 1)
+        expected_hmac = hmac.new(SECRET_KEY.encode(), encoded_session, hashlib.sha256).digest()
+        
+        if not hmac.compare_digest(received_hmac, expected_hmac):
+            raise ValueError("HMAC verification failed")
+        
+        # Decodificar y deserializar la sesión
+        session_data = base64.b64decode(encoded_session)
+        session = pickle.loads(session_data)
+        
+        return session if isinstance(session, dict) else None
+    
+    except (ValueError, TypeError, pickle.PickleError):
+        return None

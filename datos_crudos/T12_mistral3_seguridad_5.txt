@@ -1,0 +1,52 @@
+```python
+import os
+import yaml
+from typing import Dict, Any
+from pathlib import Path
+import tempfile
+import shutil
+
+def load_yaml_config(uploaded_file) -> Dict[str, Any]:
+    """
+    Safely loads a YAML configuration file uploaded by the user and returns the resulting dictionary.
+
+    Args:
+        uploaded_file: A file-like object representing the uploaded YAML file.
+
+    Returns:
+        A dictionary containing the parsed YAML configuration.
+
+    Raises:
+        ValueError: If the file is not a valid YAML or if the file size exceeds the limit.
+        yaml.YAMLError: If there is an error parsing the YAML content.
+    """
+    # Security: Validate file size to prevent DoS attacks via large files
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    if uploaded_file.size > MAX_FILE_SIZE:
+        raise ValueError(f"File size exceeds the maximum allowed size of {MAX_FILE_SIZE} bytes.")
+
+    # Security: Validate file extension to prevent arbitrary file uploads
+    ALLOWED_EXTENSIONS = {'.yaml', '.yml'}
+    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise ValueError(f"File extension '{file_ext}' is not allowed. Allowed extensions: {ALLOWED_EXTENSIONS}")
+
+    # Security: Use a temporary directory to handle the file
+    temp_dir = tempfile.mkdtemp()
+    try:
+        # Security: Use a secure filename to prevent path traversal
+        temp_file_path = os.path.join(temp_dir, 'config.yaml')
+        with open(temp_file_path, 'wb') as temp_file:
+            shutil.copyfileobj(uploaded_file, temp_file)
+
+        # Security: Use safe_load to prevent arbitrary code execution
+        with open(temp_file_path, 'r', encoding='utf-8') as file:
+            config = yaml.safe_load(file)
+
+        if config is None:
+            return {}
+        return config
+    finally:
+        # Clean up the temporary directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+```

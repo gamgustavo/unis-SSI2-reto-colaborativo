@@ -1,0 +1,67 @@
+```python
+from flask import Flask, Response
+import os
+
+app = Flask(__name__)
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,  # Solo enviar cookies sobre HTTPS
+    SESSION_COOKIE_HTTPONLY=True,  # Prevenir acceso a cookies via JavaScript
+    SESSION_COOKIE_SAMESITE='Lax',  # Protección CSRF
+    PERMANENT_SESSION_LIFETIME=900,  # Tiempo de sesión de 15 minutos
+    SECRET_KEY=os.environ.get('FLASK_SECRET_KEY', os.urandom(24).hex())  # Clave secreta desde variable de entorno
+)
+
+# Headers de seguridad para todas las respuestas
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
+
+@app.route('/')
+def inicio():
+    # Validación de entrada implícita - no hay parámetros en esta ruta
+    # Escapado automático de Flask en plantillas (aunque aquí usamos texto plano)
+    contenido = "¡Hola! Esta es la página de inicio."
+    
+    # Configurar respuesta con tipo de contenido explícito
+    return Response(
+        contenido,
+        status=200,
+        content_type='text/plain; charset=utf-8'
+    )
+
+@app.errorhandler(404)
+def pagina_no_encontrada(error):
+    return Response(
+        "Página no encontrada",
+        status=404,
+        content_type='text/plain; charset=utf-8'
+    )
+
+@app.errorhandler(500)
+def error_interno(error):
+    return Response(
+        "Error interno del servidor",
+        status=500,
+        content_type='text/plain; charset=utf-8'
+    )
+
+if __name__ == '__main__':
+    # Desactivar debug en producción
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Configuración segura del servidor
+    app.run(
+        host='127.0.0.1',  # Solo localhost por defecto
+        port=int(os.environ.get('PORT', 5000)),
+        debug=debug_mode,
+        threaded=True
+    )
+```

@@ -1,0 +1,103 @@
+from flask import Flask, request, jsonify
+import sqlite3
+import re
+
+app = Flask(__name__)
+
+def get_db_connection():
+    """Establece conexión segura con la base de datos"""
+    conn = sqlite3.connect('database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def validate_input(nombre):
+    """Valida que el nombre cumpla con un patrón seguro"""
+    # Permitir letras, números, espacios y algunos caracteres comunes
+    # Ajustar según los requisitos específicos de la aplicación
+    if not nombre or len(nombre) > 100:
+        return False
+    
+    # Patrón seguro: solo letras, números, espacios y guiones
+    pattern = r'^[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s\-]+$'
+    return bool(re.match(pattern, nombre))
+
+@app.route('/buscar_usuario', methods=['GET'])
+def buscar_usuario():
+    """Endpoint seguro para buscar usuario por nombre"""
+    
+    # 1. Validar que el parámetro 'nombre' esté presente
+    nombre = request.args.get('nombre')
+    if not nombre:
+        return jsonify({'error': 'El parámetro "nombre" es requerido'}), 400
+    
+    # 2. Validar formato del input
+    if not validate_input(nombre):
+        return jsonify({'error': 'Nombre no válido'}), 400
+    
+    # 3. Limitar longitud del parámetro
+    if len(nombre) > 100:
+        return jsonify({'error': 'Nombre demasiado largo'}), 400
+    
+    conn = None
+    try:
+        # 4. Usar consultas parametrizadas para prevenir SQL injection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Consulta segura con parámetros
+        cursor.execute(
+            "SELECT id, nombre, email, fecha_creacion FROM usuarios WHERE nombre = ? LIMIT 1",
+            (nombre,)
+        )
+        
+        usuario = cursor.fetchone()
+        
+        if usuario:
+            # 5. Convertir resultado a diccionario de forma segura
+            datos_usuario = dict(usuario)
+            
+            # 6. Sanitizar datos sensibles si es necesario
+            # (ejemplo: ocultar parte del email)
+            if 'email' in datos_usuario:
+                email = datos_usuario['email']
+                if '@' in email:
+                    local, domain = email.split('@', 1)
+                    datos_usuario['email'] = f"{local[0]}***@{domain}"
+            
+            return jsonify(datos_usuario), 200
+        else:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+            
+    except sqlite3.Error as e:
+        # 7. Loggear error sin exponer detalles internos
+        app.logger.error(f"Error de base de datos: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    except Exception as e:
+        # 8. Manejo genérico de excepciones
+        app.logger.error(f"Error inesperado: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    finally:
+        # 9. Cerrar conexión siempre
+        if conn:
+            conn.close()
+
+@app.errorhandler(404)
+def not_found(error):
+    """Manejo de rutas no encontradas"""
+    return jsonify({'error': 'Endpoint no encontrado'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    """Manejo de métodos HTTP no permitidos"""
+    return jsonify({'error': 'Método no permitido'}), 405
+
+if __name__ == '__main__':
+    # 10. Configuraciones de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+    
+    # En producción, usar:
+    # app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=True)

@@ -1,0 +1,200 @@
+```python
+import logging
+import hashlib
+import secrets
+import time
+from datetime import datetime
+from typing import Optional, Tuple
+import os
+import json
+
+# Configuración del logger
+LOG_FILE = "auth_attempts.log"
+MAX_ATTEMPTS_PER_MINUTE = 5
+FAILED_ATTEMPTS = {}
+
+def setup_logging():
+    """Configura el sistema de logging seguro"""
+    # Crear directorio de logs si no existe
+    log_dir = os.path.dirname(LOG_FILE)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, mode=0o700)
+    
+    # Configurar logger
+    logger = logging.getLogger('auth_logger')
+    logger.setLevel(logging.INFO)
+    
+    # Evitar handlers duplicados
+    if not logger.handlers:
+        # File handler con permisos seguros
+        file_handler = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # Formato seguro que no incluye contraseñas en texto plano
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - IP:%(ip)s - User:%(user)s - '
+            'Hash:%(pass_hash)s - Result:%(result)s - Details:%(details)s'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    return logger
+
+def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    """Hash seguro de contraseña usando PBKDF2"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    
+    # Usar PBKDF2 con múltiples iteraciones
+    hashed = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Número de iteraciones
+    )
+    return hashed.hex(), salt
+
+def check_rate_limit(ip_address: str) -> bool:
+    """Verifica límite de intentos por IP"""
+    current_time = time.time()
+    minute_ago = current_time - 60
+    
+    # Limpiar intentos antiguos
+    if ip_address in FAILED_ATTEMPTS:
+        FAILED_ATTEMPTS[ip_address] = [
+            t for t in FAILED_ATTEMPTS[ip_address] if t > minute_ago
+        ]
+    
+    # Contar intentos recientes
+    attempt_count = len(FAILED_ATTEMPTS.get(ip_address, []))
+    
+    if attempt_count >= MAX_ATTEMPTS_PER_MINUTE:
+        return False
+    
+    # Registrar nuevo intento
+    if ip_address not in FAILED_ATTEMPTS:
+        FAILED_ATTEMPTS[ip_address] = []
+    FAILED_ATTEMPTS[ip_address].append(current_time)
+    
+    return True
+
+def sanitize_input(input_string: str, max_length: int = 100) -> str:
+    """Limpia y valida entrada de usuario"""
+    if not input_string:
+        return ""
+    
+    # Limitar longitud
+    if len(input_string) > max_length:
+        input_string = input_string[:max_length]
+    
+    # Eliminar caracteres peligrosos (solo para logging, no para procesamiento)
+    sanitized = "".join(c for c in input_string if c.isprintable())
+    return sanitized
+
+def login(username: str, password: str, ip_address: str = "unknown") -> bool:
+    """
+    Función de inicio de sesión segura con logging
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña
+        ip_address: Dirección IP del cliente (para rate limiting)
+    
+    Returns:
+        bool: True si el login es exitoso, False en caso contrario
+    """
+    logger = setup_logging()
+    
+    # Sanitizar entradas para logging
+    safe_username = sanitize_input(username)
+    safe_ip = sanitize_input(ip_address, max_length=45)
+    
+    # Verificar rate limiting
+    if not check_rate_limit(safe_ip):
+        log_data = {
+            'ip': safe_ip,
+            'user': safe_username,
+            'pass_hash': 'rate_limited',
+            'result': 'BLOCKED',
+            'details': 'Rate limit exceeded'
+        }
+        logger.warning('', extra=log_data)
+        return False
+    
+    # Validar entradas básicas
+    if not username or not password:
+        pass_hash, _ = hash_password("")  # Hash vacío para logging
+        log_data = {
+            'ip': safe_ip,
+            'user': safe_username,
+            'pass_hash': pass_hash[:16],  # Solo primeros 16 chars para logging
+            'result': 'FAILED',
+            'details': 'Empty credentials'
+        }
+        logger.warning('', extra=log_data)
+        return False
+    
+    try:
+        # Aquí iría la lógica real de autenticación
+        # Por ejemplo, verificar contra una base de datos
+        
+        # SIMULACIÓN: Credenciales válidas (en producción, verificar contra DB)
+        valid_username = "usuario_valido"
+        valid_password_hash = "hash_almacenado_en_db"
+        valid_salt = "salt_almacenado_en_db"
+        
+        # Calcular hash de la contraseña proporcionada
+        provided_hash, _ = hash_password(password, valid_salt)
+        
+        # Comparación segura contra timing attacks
+        success = secrets.compare_digest(username, valid_username) and \
+                 secrets.compare_digest(provided_hash, valid_password_hash)
+        
+        # Registrar intento
+        pass_hash, _ = hash_password(password)
+        log_data = {
+            'ip': safe_ip,
+            'user': safe_username,
+            'pass_hash': pass_hash[:16],  # Solo primeros 16 chars para logging
+            'result': 'SUCCESS' if success else 'FAILED',
+            'details': 'Authentication attempt'
+        }
+        
+        if success:
+            logger.info('', extra=log_data)
+        else:
+            logger.warning('', extra=log_data)
+        
+        return success
+        
+    except Exception as e:
+        # Registrar error sin exponer detalles sensibles
+        log_data = {
+            'ip': safe_ip,
+            'user': safe_username,
+            'pass_hash': 'error',
+            'result': 'ERROR',
+            'details': f'System error: {type(e).__name__}'
+        }
+        logger.error('', extra=log_data)
+        return False
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configurar permisos seguros para el archivo de log
+    if os.path.exists(LOG_FILE):
+        os.chmod(LOG_FILE, 0o600)
+    
+    # Ejemplos de uso
+    print("Test 1 - Login exitoso:")
+    result = login("usuario_valido", "contraseña_segura", "192.168.1.100")
+    print(f"Resultado: {result}")
+    
+    print("\nTest 2 - Login fallido:")
+    result = login("usuario_invalido", "contraseña_erronea", "192.168.1.101")
+    print(f"Resultado: {result}")
+    
+    print("\nTest 3 - Entrada maliciosa:")
+    result = login("<script>alert('xss')</script>", "' OR '1'='1", "192.168.1.102")
+    print(f"Resultado: {result}")
+```

@@ -1,0 +1,120 @@
+import subprocess
+import shlex
+import platform
+import re
+from typing import Optional, Tuple
+
+def safe_ping(hostname: str, timeout: int = 4, count: int = 2) -> Tuple[bool, Optional[str]]:
+    """
+    Realiza un ping seguro a un host y retorna si responde.
+    
+    Args:
+        hostname: Nombre del host o dirección IP a verificar
+        timeout: Tiempo máximo de espera en segundos (por defecto 4)
+        count: Número de paquetes a enviar (por defecto 2)
+    
+    Returns:
+        Tuple[bool, Optional[str]]: (True si el host responde, mensaje de error o None)
+    
+    Seguridad implementada:
+    1. Validación de entrada contra inyección de comandos
+    2. Uso de parámetros separados en lugar de shell=True
+    3. Limpieza y sanitización del hostname
+    4. Timeout para evitar DoS
+    5. Validación del formato del hostname
+    """
+    
+    # 1. Validación básica de entrada
+    if not hostname or not isinstance(hostname, str):
+        return False, "Nombre de host inválido"
+    
+    # 2. Limpieza del hostname - eliminar espacios y caracteres peligrosos
+    hostname = hostname.strip()
+    
+    # 3. Validación del formato del hostname/dirección IP
+    # Patrón simplificado para nombres de host y direcciones IP
+    hostname_pattern = re.compile(
+        r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$|'  # Nombres de dominio
+        r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|'  # IPv4
+        r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$'  # Nombres de host simples
+    )
+    
+    if not hostname_pattern.match(hostname):
+        return False, f"Formato de hostname inválido: {hostname}"
+    
+    # 4. Prevenir inyección de comandos - longitud máxima razonable
+    if len(hostname) > 255:
+        return False, "Nombre de host demasiado largo"
+    
+    # 5. Determinar comando según sistema operativo
+    system = platform.system().lower()
+    
+    try:
+        if system == "windows":
+            # Windows usa -n para count y -w para timeout en milisegundos
+            command = ["ping", "-n", str(count), "-w", str(timeout * 1000), hostname]
+        else:
+            # Linux/Unix/Mac usa -c para count y -W para timeout en segundos
+            command = ["ping", "-c", str(count), "-W", str(timeout), hostname]
+        
+        # 6. Ejecutar ping sin shell=True para prevenir inyección
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout + 2,  # Timeout adicional para el proceso completo
+            encoding='utf-8',
+            errors='ignore'
+        )
+        
+        # 7. Analizar resultado según sistema operativo
+        if system == "windows":
+            # En Windows, buscar "TTL=" o "Tiempo de vida=" en la salida
+            if result.returncode == 0 and ("TTL=" in result.stdout.upper() or "Tiempo de vida=" in result.stdout):
+                return True, None
+        else:
+            # En Unix/Linux, código de retorno 0 generalmente significa éxito
+            if result.returncode == 0:
+                return True, None
+        
+        return False, f"Host no responde: {hostname}"
+        
+    except subprocess.TimeoutExpired:
+        return False, f"Timeout al intentar ping a {hostname}"
+    except FileNotFoundError:
+        return False, "Comando ping no encontrado en el sistema"
+    except PermissionError:
+        return False, "Permiso denegado para ejecutar ping"
+    except Exception as e:
+        # No exponer detalles internos del error por seguridad
+        return False, f"Error al ejecutar ping: Operación falló"
+
+def main():
+    """Función principal para interacción con el usuario"""
+    print("=== Verificador de Ping Seguro ===")
+    
+    try:
+        # Obtener entrada del usuario
+        hostname = input("Ingrese el nombre de host o dirección IP: ")
+        
+        # Validar que no esté vacío
+        if not hostname:
+            print("Error: Debe ingresar un nombre de host")
+            return
+        
+        # Ejecutar ping seguro
+        is_alive, error_message = safe_ping(hostname)
+        
+        if is_alive:
+            print(f"✓ El host '{hostname}' responde al ping")
+        else:
+            print(f"✗ {error_message}")
+            
+    except KeyboardInterrupt:
+        print("\nOperación cancelada por el usuario")
+    except Exception as e:
+        print(f"Error inesperado: {str(e)}")
+
+if __name__ == "__main__":
+    main()

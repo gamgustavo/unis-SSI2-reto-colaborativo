@@ -1,0 +1,48 @@
+```python
+import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring
+from typing import List, Dict, Optional
+import logging
+
+# Configuración básica de logging para registrar errores
+logging.basicConfig(level=logging.ERROR)
+
+def extract_items_from_xml(xml_content: str) -> List[Dict[str, Optional[str]]]:
+    """
+    Extrae todos los elementos 'item' de un documento XML de manera segura.
+
+    Args:
+        xml_content: Cadena que contiene el documento XML.
+
+    Returns:
+        Lista de diccionarios con los valores de los elementos 'item'.
+        Cada diccionario contiene las claves 'text' (contenido del elemento)
+        y 'attributes' (diccionario de atributos si existen).
+
+    Raises:
+        ValueError: Si el XML está mal formado o contiene entidades externas peligrosas.
+    """
+    if not xml_content or not isinstance(xml_content, str):
+        raise ValueError("El contenido XML debe ser una cadena no vacía")
+
+    try:
+        # Usamos defusedxml para prevenir ataques XXE (XML External Entity)
+        root = fromstring(xml_content)
+    except ET.ParseError as e:
+        logging.error(f"Error al parsear el XML: {str(e)}")
+        raise ValueError("El documento XML está mal formado") from e
+    except Exception as e:
+        logging.error(f"Error inesperado al procesar el XML: {str(e)}")
+        raise ValueError("Error al procesar el documento XML") from e
+
+    items = []
+
+    for item in root.findall('.//item'):
+        item_data = {
+            'text': item.text.strip() if item.text else None,
+            'attributes': {k: v for k, v in item.attrib.items()} if item.attrib else None
+        }
+        items.append(item_data)
+
+    return items
+```

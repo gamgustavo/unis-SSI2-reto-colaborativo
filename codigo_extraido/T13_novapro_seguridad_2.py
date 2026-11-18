@@ -1,0 +1,30 @@
+from flask import Flask, render_template_string
+
+app = Flask(__name__)
+
+# Establecer una clave secreta para firmar cookies y otros datos
+app.secret_key = 'una_clave_secreta_compleja_y_aleatoria'
+
+# Deshabilitar la opción de depuración en un entorno de producción
+app.config['DEBUG'] = False
+
+# Configuración de seguridad: Content Security Policy (CSP)
+app.config['CONTENT_SECURITY_POLICY'] = "default-src 'self'; script-src'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+
+# Función para establecer cabeceras de seguridad
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Content-Security-Policy'] = app.config['CONTENT_SECURITY_POLICY']
+    return response
+
+# Ruta de inicio
+@app.route('/')
+def index():
+    return render_template_string("<h1>Bienvenido a la aplicación Flask segura</h1>")
+
+if __name__ == '__main__':
+    # Ejecutar la aplicación en un entorno seguro
+    app.run(ssl_context='adhoc')

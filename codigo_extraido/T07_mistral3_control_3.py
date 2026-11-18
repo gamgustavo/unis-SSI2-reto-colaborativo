@@ -1,0 +1,45 @@
+import pickle
+import base64
+import zlib
+from itsdangerous import URLSafeTimedSerializer, BadSignature
+
+def reconstruct_session(session_cookie_bytes, secret_key, salt='session'):
+    """
+    Reconstruye un objeto de sesión a partir del valor de una cookie de sesión.
+
+    Args:
+        session_cookie_bytes (bytes): Valor de la cookie de sesión en bytes.
+        secret_key (str): Clave secreta usada para firmar la cookie.
+        salt (str): Sal opcional para el serializador.
+
+    Returns:
+        dict: Objeto de sesión reconstruido.
+
+    Raises:
+        BadSignature: Si la firma de la cookie no es válida.
+    """
+    # Configurar el serializador
+    serializer = URLSafeTimedSerializer(
+        secret_key=secret_key,
+        salt=salt,
+        serializer=pickle,
+        signer_kwargs={'key_derivation': 'hmac', 'digest_method': 'sha256'}
+    )
+
+    # Decodificar y descomprimir si es necesario
+    try:
+        # Intentar decodificar como base64 (formato común en cookies)
+        session_data = base64.urlsafe_b64decode(session_cookie_bytes)
+    except (ValueError, TypeError):
+        session_data = session_cookie_bytes
+
+    # Intentar descomprimir (algunas implementaciones comprimen las cookies)
+    try:
+        session_data = zlib.decompress(session_data)
+    except zlib.error:
+        pass
+
+    # Cargar la sesión usando itsdangerous
+    session = serializer.loads(session_data)
+
+    return session

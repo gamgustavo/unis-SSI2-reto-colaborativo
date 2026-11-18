@@ -1,0 +1,104 @@
+```python
+from flask import Flask, Response
+import os
+
+app = Flask(__name__)
+
+# Configuración de seguridad básica
+app.config.update(
+    SESSION_COOKIE_SECURE=True,      # Solo enviar cookies sobre HTTPS
+    SESSION_COOKIE_HTTPONLY=True,    # Prevenir acceso a cookies via JavaScript
+    SESSION_COOKIE_SAMESITE='Lax',   # Protección CSRF
+    PERMANENT_SESSION_LIFETIME=1800, # Tiempo de expiración de sesión (30 minutos)
+)
+
+# Headers de seguridad globales
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+
+@app.route('/')
+def home():
+    # Validación de entrada implícita - no hay parámetros en esta ruta
+    # Escapado automático por Flask en la plantilla (aunque usamos Response directo)
+    content = """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Aplicación Flask Segura</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+            .container { max-width: 800px; margin: 0 auto; }
+            code { background: #f4f4f4; padding: 2px 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Aplicación Flask Segura</h1>
+            <p>Esta es una aplicación Flask mínima con configuraciones de seguridad básicas.</p>
+            <p>Características de seguridad implementadas:</p>
+            <ul>
+                <li>Cookies seguras (Secure, HttpOnly, SameSite)</li>
+                <li>Headers de protección XSS y clickjacking</li>
+                <li>Política de seguridad de contenido (CSP)</li>
+                <li>Prevención de MIME sniffing</li>
+                <li>Tiempo de sesión limitado</li>
+            </ul>
+            <p><strong>Nota:</strong> Para producción, asegúrate de:</p>
+            <ol>
+                <li>Usar HTTPS con certificados válidos</li>
+                <li>Configurar adecuadamente las variables de entorno</li>
+                <li>Mantener Flask y sus dependencias actualizadas</li>
+                <li>Implementar autenticación y autorización según sea necesario</li>
+                <li>Configurar un servidor WSGI como Gunicorn para producción</li>
+            </ol>
+        </div>
+    </body>
+    </html>
+    """
+    return Response(content, mimetype='text/html; charset=utf-8')
+
+# Manejo de errores básico
+@app.errorhandler(404)
+def page_not_found(e):
+    return Response(
+        '<h1>404 - Página no encontrada</h1><p>El recurso solicitado no existe.</p>',
+        status=404,
+        mimetype='text/html; charset=utf-8'
+    )
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return Response(
+        '<h1>500 - Error interno del servidor</h1>',
+        status=500,
+        mimetype='text/html; charset=utf-8'
+    )
+
+if __name__ == '__main__':
+    # Configuración del entorno
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Advertencia sobre modo debug en producción
+    if debug_mode:
+        print("ADVERTENCIA: El modo debug está activado. No usar en producción.")
+    
+    # Usar host 0.0.0.0 solo si se especifica explícitamente
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    
+    # El servidor de desarrollo de Flask no es para producción
+    app.run(
+        host=host,
+        port=int(os.environ.get('FLASK_PORT', 5000)),
+        debug=debug_mode,
+        # Deshabilitar reloader en producción para mayor seguridad
+        use_reloader=debug_mode
+    )
+```

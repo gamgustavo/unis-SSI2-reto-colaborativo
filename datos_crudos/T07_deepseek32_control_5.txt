@@ -1,0 +1,108 @@
+```python
+import base64
+import json
+import pickle
+import zlib
+from typing import Any, Dict, Optional
+
+def reconstruct_session(cookie_value: bytes) -> Dict[str, Any]:
+    """
+    Reconstruye un objeto de sesión a partir del valor de una cookie en bytes.
+    
+    Args:
+        cookie_value: Valor de la cookie de sesión en bytes.
+        
+    Returns:
+        Diccionario con los datos de la sesión reconstruidos.
+        
+    Raises:
+        ValueError: Si no se puede decodificar o deserializar la cookie.
+    """
+    if not cookie_value:
+        return {}
+    
+    try:
+        # Intentar decodificar como base64 primero (común en cookies web)
+        try:
+            decoded = base64.b64decode(cookie_value)
+        except Exception:
+            decoded = cookie_value
+        
+        # Intentar descomprimir si está comprimido
+        try:
+            decompressed = zlib.decompress(decoded)
+        except zlib.error:
+            decompressed = decoded
+        
+        # Intentar deserializar con pickle (común en Flask, Django antiguo)
+        try:
+            session_data = pickle.loads(decompressed)
+            if isinstance(session_data, dict):
+                return session_data
+            else:
+                return {'_pickled_object': session_data}
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+            pass
+        
+        # Intentar decodificar como JSON (común en cookies modernas)
+        try:
+            # Si son bytes, intentar decodificar a string
+            if isinstance(decompressed, bytes):
+                json_str = decompressed.decode('utf-8')
+            else:
+                json_str = str(decompressed)
+            
+            # Limpiar posibles caracteres extraños
+            json_str = json_str.strip()
+            
+            # Intentar parsear como JSON
+            session_data = json.loads(json_str)
+            if isinstance(session_data, dict):
+                return session_data
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        
+        # Si llegamos aquí, intentar interpretar como string simple
+        try:
+            if isinstance(decompressed, bytes):
+                return {'_raw_value': decompressed.decode('utf-8', errors='ignore')}
+            else:
+                return {'_raw_value': str(decompressed)}
+        except:
+            return {'_raw_bytes': cookie_value.hex()}
+            
+    except Exception as e:
+        raise ValueError(f"No se pudo reconstruir la sesión: {str(e)}")
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Ejemplo 1: Cookie en base64 (simulando una cookie Flask comprimida)
+    import pickle as pkl
+    
+    # Crear datos de sesión de ejemplo
+    example_session = {
+        'user_id': 123,
+        'username': 'john_doe',
+        'logged_in': True,
+        'permissions': ['read', 'write']
+    }
+    
+    # Serializar con pickle y comprimir (como hace Flask por defecto)
+    pickled = pkl.dumps(example_session)
+    compressed = zlib.compress(pickled)
+    encoded = base64.b64encode(compressed)
+    
+    print("Ejemplo 1 - Cookie Flask-style:")
+    print(reconstruct_session(encoded))
+    print()
+    
+    # Ejemplo 2: Cookie JSON
+    json_session = json.dumps(example_session).encode('utf-8')
+    print("Ejemplo 2 - Cookie JSON:")
+    print(reconstruct_session(json_session))
+    print()
+    
+    # Ejemplo 3: Cookie simple
+    print("Ejemplo 3 - Cookie simple:")
+    print(reconstruct_session(b'simple_session_value'))
+```

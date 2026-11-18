@@ -1,0 +1,85 @@
+import base64
+import json
+import pickle
+import zlib
+from typing import Any, Dict, Optional
+
+def reconstruct_session(cookie_value: str) -> Dict[str, Any]:
+    """
+    Reconstruye un objeto de sesión a partir del valor de una cookie de sesión.
+    
+    Args:
+        cookie_value: Valor de la cookie de sesión en formato string (bytes codificados).
+    
+    Returns:
+        Diccionario con los datos de la sesión reconstruidos.
+    
+    Raises:
+        ValueError: Si no se puede decodificar o deserializar la cookie.
+    """
+    if not cookie_value:
+        return {}
+    
+    try:
+        # Decodificar de base64
+        decoded_bytes = base64.b64decode(cookie_value)
+    except Exception as e:
+        raise ValueError(f"Error decodificando base64: {e}")
+    
+    # Intentar diferentes métodos de descompresión/deserialización
+    session_data = None
+    
+    # Método 1: Intentar con pickle (formato común en Flask/Django)
+    try:
+        session_data = pickle.loads(decoded_bytes)
+        if isinstance(session_data, dict):
+            return session_data
+    except:
+        pass
+    
+    # Método 2: Intentar con zlib descompresión + pickle
+    try:
+        decompressed = zlib.decompress(decoded_bytes)
+        session_data = pickle.loads(decompressed)
+        if isinstance(session_data, dict):
+            return session_data
+    except:
+        pass
+    
+    # Método 3: Intentar con JSON (algunos frameworks usan JSON serializado)
+    try:
+        decoded_str = decoded_bytes.decode('utf-8')
+        session_data = json.loads(decoded_str)
+        if isinstance(session_data, dict):
+            return session_data
+    except:
+        pass
+    
+    # Método 4: Intentar con zlib + JSON
+    try:
+        decompressed = zlib.decompress(decoded_bytes)
+        decoded_str = decompressed.decode('utf-8')
+        session_data = json.loads(decoded_str)
+        if isinstance(session_data, dict):
+            return session_data
+    except:
+        pass
+    
+    # Si llegamos aquí, intentar devolver los bytes crudos o lanzar error
+    try:
+        return {"raw_data": decoded_bytes.hex(), "warning": "No se pudo deserializar automáticamente"}
+    except:
+        raise ValueError("No se pudo reconstruir la sesión con ningún método conocido")
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Ejemplo con una cookie simulada
+    test_data = {"user_id": 123, "username": "ejemplo", "logged_in": True}
+    
+    # Simular cookie de Flask (pickle + base64)
+    pickled = pickle.dumps(test_data)
+    encoded = base64.b64encode(pickled).decode('utf-8')
+    
+    print("Cookie simulada:", encoded[:50] + "...")
+    session = reconstruct_session(encoded)
+    print("Sesión reconstruida:", session)

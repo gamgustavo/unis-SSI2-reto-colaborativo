@@ -1,0 +1,151 @@
+```python
+import os
+from flask import Flask, request, jsonify, send_file, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración
+DOCUMENTS_FOLDER = 'documentos'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'json', 'csv', 'xml', 'html', 'log'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB límite
+
+# Verificar que la carpeta documentos existe
+if not os.path.exists(DOCUMENTS_FOLDER):
+    os.makedirs(DOCUMENTS_FOLDER)
+
+def is_allowed_filename(filename):
+    """Valida que el nombre de archivo sea seguro y tenga extensión permitida"""
+    if not filename or filename.strip() == '':
+        return False
+    
+    # Usar secure_filename para sanitizar
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename:
+        return False
+    
+    # Verificar extensión permitida
+    if '.' not in filename:
+        return False
+    
+    ext = filename.rsplit('.', 1)[1].lower()
+    return ext in ALLOWED_EXTENSIONS
+
+def validate_file_path(requested_filename):
+    """Valida la ruta del archivo para prevenir path traversal"""
+    # Sanitizar el nombre de archivo
+    safe_filename = secure_filename(requested_filename)
+    
+    if not safe_filename or safe_filename != requested_filename:
+        return None
+    
+    # Construir ruta completa
+    file_path = os.path.join(DOCUMENTS_FOLDER, safe_filename)
+    
+    # Verificar que la ruta esté dentro de la carpeta documentos
+    try:
+        # Normalizar rutas para comparación
+        requested_path = os.path.abspath(file_path)
+        base_path = os.path.abspath(DOCUMENTS_FOLDER)
+        
+        # Verificar que el archivo esté dentro de la carpeta base
+        if not requested_path.startswith(base_path + os.sep):
+            return None
+            
+        # Verificar que el archivo exista
+        if not os.path.exists(requested_path):
+            return None
+            
+        # Verificar que sea un archivo (no directorio)
+        if not os.path.isfile(requested_path):
+            return None
+            
+        # Verificar tamaño del archivo
+        file_size = os.path.getsize(requested_path)
+        if file_size > MAX_FILE_SIZE:
+            return None
+            
+        return requested_path
+    except (OSError, ValueError):
+        return None
+
+@app.route('/get-file', methods=['GET'])
+def get_file():
+    """
+    Endpoint para obtener el contenido de un archivo.
+    Parámetro: filename (query string)
+    """
+    # Obtener nombre de archivo del query parameter
+    filename = request.args.get('filename')
+    
+    # Validar que se proporcionó un nombre de archivo
+    if not filename:
+        return jsonify({
+            'error': 'Se requiere el parámetro filename',
+            'status': 'error'
+        }), 400
+    
+    # Validar nombre de archivo
+    if not is_allowed_filename(filename):
+        return jsonify({
+            'error': 'Nombre de archivo no válido o extensión no permitida',
+            'status': 'error'
+        }), 400
+    
+    # Validar y obtener ruta segura
+    file_path = validate_file_path(filename)
+    if not file_path:
+        return jsonify({
+            'error': 'Archivo no encontrado o no accesible',
+            'status': 'error'
+        }), 404
+    
+    try:
+        # Leer contenido del archivo
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+            content = file.read()
+        
+        # Obtener información del archivo
+        file_stats = os.stat(file_path)
+        
+        return jsonify({
+            'filename': filename,
+            'content': content,
+            'size': file_stats.st_size,
+            'last_modified': file_stats.st_mtime,
+            'status': 'success'
+        })
+        
+    except IOError as e:
+        app.logger.error(f"Error al leer archivo {filename}: {str(e)}")
+        return jsonify({
+            'error': 'Error al leer el archivo',
+            'status': 'error'
+        }), 500
+    except Exception as e:
+        app.logger.error(f"Error inesperado con archivo {filename}: {str(e)}")
+        return jsonify({
+            'error': 'Error interno del servidor',
+            'status': 'error'
+        }), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint no encontrado', 'status': 'error'}), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({'error': 'Método no permitido', 'status': 'error'}), 405
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Error interno del servidor', 'status': 'error'}), 500
+
+if __name__ == '__main__':
+    # Configuración de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+    
+    # Solo para desarrollo - en producción usar servidor WSGI
+    app.run(debug=False, host='0.0.0.0', port=5000)
+```

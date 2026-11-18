@@ -1,0 +1,34 @@
+import re
+
+def safe_eval(expression):
+    # Define a regular expression to match only valid mathematical expressions
+    valid_chars = re.compile(r'^[0-9+\-*/(). ]*$')
+    
+    if not valid_chars.match(expression):
+        raise ValueError("Invalid characters in expression")
+    
+    try:
+        # Use eval with caution, only allowing safe characters
+        result = eval(expression, {"__builtins__": None}, {})
+        return result
+    except Exception as e:
+        raise ValueError("Invalid expression") from e
+
+def main():
+    print("Simple Calculator")
+    print("Enter 'quit' to exit.")
+    
+    while True:
+        user_input = input("Enter a mathematical expression: ")
+        
+        if user_input.lower() == 'quit':
+            break
+        
+        try:
+            result = safe_eval(user_input)
+            print(f"Result: {result}")
+        except ValueError as e:
+            print(f"Error: {e}")
+
+if __name__ == "__main__":
+    main()

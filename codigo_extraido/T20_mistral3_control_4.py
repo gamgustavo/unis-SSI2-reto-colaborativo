@@ -1,0 +1,26 @@
+import os
+import zipfile
+from werkzeug.utils import secure_filename
+
+def extraer_zip(archivo_zip, carpeta_destino='descargas'):
+    # Crear la carpeta de destino si no existe
+    if not os.path.exists(carpeta_destino):
+        os.makedirs(carpeta_destino)
+
+    # Asegurar que el nombre del archivo sea seguro
+    nombre_seguro = secure_filename(archivo_zip.filename)
+
+    # Ruta completa del archivo ZIP
+    ruta_zip = os.path.join(carpeta_destino, nombre_seguro)
+
+    # Guardar el archivo ZIP subido
+    archivo_zip.save(ruta_zip)
+
+    # Extraer el contenido del ZIP
+    with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
+        zip_ref.extractall(carpeta_destino)
+
+    # Opcional: eliminar el archivo ZIP después de extraerlo
+    os.remove(ruta_zip)
+
+    return f"Contenido extraído en {os.path.abspath(carpeta_destino)}"

@@ -1,0 +1,56 @@
+```python
+import bcrypt
+import sqlite3
+
+def hash_password(password: str) -> bytes:
+    """Hash a password for storing."""
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed_password
+
+def verify_password(stored_password: bytes, provided_password: str) -> bool:
+    """Verify a stored password against one provided by the user."""
+    return bcrypt.checkpw(provided_password.encode('utf-8'), stored_password)
+
+def create_connection():
+    """Create a database connection to a SQLite database."""
+    conn = sqlite3.connect('users.db')
+    return conn
+
+def create_table():
+    """Create a table to store users."""
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                     (username TEXT PRIMARY KEY, password TEXT)''')
+    conn.commit()
+    conn.close()
+
+def register_user(username: str, password: str):
+    """Register a new user."""
+    hashed_password = hash_password(password)
+    conn = create_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO users (username, password) VALUES (?,?)",
+                       (username, hashed_password))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        print("Username already exists.")
+    finally:
+        conn.close()
+
+def verify_user(username: str, password: str) -> bool:
+    """Verify user's password."""
+    conn = create_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT password FROM users WHERE username =?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row and verify_password(row[0], password):
+        return True
+    return False
+
+# Initialize the database table
+create_table()
+```

@@ -1,0 +1,109 @@
+```python
+from flask import Flask, request, jsonify
+import os
+import uuid
+from werkzeug.utils import secure_filename
+from PIL import Image
+import imghdr
+
+app = Flask(__name__)
+
+# Configuración
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB límite
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+UPLOAD_FOLDER = 'uploads/profiles'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    """Verifica si la extensión del archivo es permitida"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def validate_image(stream):
+    """Valida el tipo real del archivo usando su cabecera"""
+    header = stream.read(512)
+    stream.seek(0)
+    format = imghdr.what(None, header)
+    if not format:
+        return None
+    return '.' + (format if format != 'jpeg' else 'jpg')
+
+@app.route('/upload-profile-picture', methods=['POST'])
+def upload_profile_picture():
+    # Verificar que la solicitud tenga el archivo
+    if 'file' not in request.files:
+        return jsonify({'error': 'No se encontró el archivo en la solicitud'}), 400
+    
+    file = request.files['file']
+    
+    # Verificar que se seleccionó un archivo
+    if file.filename == '':
+        return jsonify({'error': 'No se seleccionó ningún archivo'}), 400
+    
+    # Validar extensión del archivo
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Tipo de archivo no permitido. Use: PNG, JPG, JPEG, GIF'}), 400
+    
+    # Validar tipo real del archivo
+    real_extension = validate_image(file.stream)
+    if not real_extension:
+        return jsonify({'error': 'El archivo no es una imagen válida'}), 400
+    
+    # Obtener extensión del nombre del archivo
+    file_extension = os.path.splitext(file.filename)[1].lower()
+    
+    # Verificar coincidencia entre extensión real y declarada
+    if real_extension != file_extension:
+        return jsonify({'error': 'Extensión del archivo no coincide con su tipo real'}), 400
+    
+    # Sanitizar nombre del archivo
+    original_filename = secure_filename(file.filename)
+    name_without_ext = os.path.splitext(original_filename)[0]
+    
+    # Generar nombre único para evitar colisiones y path traversal
+    unique_filename = f"{uuid.uuid4().hex}_{name_without_ext[:50]}{file_extension}"
+    file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+    
+    # Verificar que la ruta final esté dentro del directorio permitido
+    if not os.path.abspath(file_path).startswith(os.path.abspath(UPLOAD_FOLDER)):
+        return jsonify({'error': 'Ruta de archivo no válida'}), 400
+    
+    try:
+        # Guardar archivo
+        file.save(file_path)
+        
+        # Verificar integridad de la imagen
+        try:
+            with Image.open(file_path) as img:
+                img.verify()  # Verificar integridad
+            with Image.open(file_path) as img:
+                img.load()  # Cargar imagen para procesamiento
+                
+                # Opcional: Redimensionar si es muy grande
+                max_size = (800, 800)
+                if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                    img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                    img.save(file_path, optimize=True, quality=85)
+                
+        except Exception as img_error:
+            # Eliminar archivo corrupto
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return jsonify({'error': 'La imagen está corrupta o no es válida'}), 400
+        
+        return jsonify({
+            'message': 'Imagen subida exitosamente',
+            'filename': unique_filename,
+            'path': file_path
+        }), 200
+        
+    except Exception as e:
+        # Limpiar en caso de error
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        app.logger.error(f"Error al subir imagen: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor al procesar la imagen'}), 500
+
+if __name__ == '__main__':
+    app.run(debug=False)  # Debug desactivado en producción
+```

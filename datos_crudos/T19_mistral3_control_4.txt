@@ -1,0 +1,26 @@
+```python
+import logging
+from datetime import datetime
+
+def setup_logging():
+    logging.basicConfig(
+        filename='login_attempts.log',
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+def login(username, password):
+    setup_logging()
+    logging.info(f"Intento de inicio de sesión - Usuario: {username}, Contraseña: {'*' * len(password)}")
+
+    # Aquí iría la lógica real de autenticación
+    # Por ejemplo, verificar contra una base de datos
+    # Este es solo un ejemplo básico
+    if username == "admin" and password == "securepassword":
+        logging.info(f"Inicio de sesión exitoso para el usuario: {username}")
+        return True
+    else:
+        logging.warning(f"Inicio de sesión fallido para el usuario: {username}")
+        return False
+```

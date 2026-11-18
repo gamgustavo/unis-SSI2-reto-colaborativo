@@ -1,0 +1,154 @@
+```python
+import re
+import ast
+import operator
+import math
+
+def safe_eval(expr):
+    """
+    Safely evaluate a mathematical expression.
+    Restricts the allowed operations and functions to a safe subset.
+    """
+    # Allowed operators and functions
+    allowed_operators = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,
+        ast.Mod: operator.mod,
+        ast.USub: operator.neg,
+        ast.BitXor: operator.pow,  # Treat ^ as exponentiation
+    }
+
+    allowed_functions = {
+        'abs': abs,
+        'min': min,
+        'max': max,
+        'round': round,
+        'math.sqrt': math.sqrt,
+        'math.sin': math.sin,
+        'math.cos': math.cos,
+        'math.tan': math.tan,
+        'math.log': math.log,
+        'math.log10': math.log10,
+        'math.exp': math.exp,
+    }
+
+    # Parse the expression into an AST
+    try:
+        node = ast.parse(expr, mode='eval').body
+    except SyntaxError:
+        raise ValueError("Invalid syntax in expression")
+
+    def _eval(node):
+        # Handle numbers
+        if isinstance(node, ast.Num):
+            return node.n
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+
+        # Handle allowed operators
+        elif isinstance(node, ast.BinOp) and type(node.op) in allowed_operators:
+            left = _eval(node.left)
+            right = _eval(node.right)
+            return allowed_operators[type(node.op)](left, right)
+
+        elif isinstance(node, ast.UnaryOp) and type(node.op) in allowed_operators:
+            operand = _eval(node.operand)
+            return allowed_operators[type(node.op)](operand)
+
+        # Handle allowed function calls
+        elif isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError("Function calls must be simple names")
+            func_name = node.func.id
+            if func_name not in allowed_functions:
+                raise ValueError(f"Function '{func_name}' is not allowed")
+
+            args = [_eval(arg) for arg in node.args]
+            return allowed_functions[func_name](*args)
+
+        # Handle variables (only allow 'pi' and 'e' from math)
+        elif isinstance(node, ast.Name):
+            if node.id == 'pi':
+                return math.pi
+            elif node.id == 'e':
+                return math.e
+            else:
+                raise ValueError(f"Name '{node.id}' is not allowed")
+
+        # Handle parentheses
+        elif isinstance(node, ast.Expression):
+            return _eval(node.body)
+
+        else:
+            raise ValueError(f"Unsupported operation: {type(node).__name__}")
+
+    return _eval(node)
+
+def sanitize_input(expr):
+    """
+    Sanitize the input expression to prevent injection attacks.
+    """
+    # Remove any whitespace
+    expr = expr.strip()
+
+    # Check for potentially dangerous patterns
+    dangerous_patterns = [
+        r'__',  # Double underscore (could indicate special methods)
+        r'\[', r'\]',  # Square brackets (could indicate list/dict access)
+        r'\{', r'\}',  # Curly braces (could indicate dict literals)
+        r'lambda',  # Lambda functions
+        r'import',  # Import statements
+        r'os\.', r'sys\.', r'subprocess\.',  # Dangerous modules
+        r'exec\(', r'eval\(', r'compile\(',  # Dangerous built-ins
+        r'open\(',  # File operations
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, expr, re.IGNORECASE):
+            raise ValueError("Invalid characters in expression")
+
+    # Check for balanced parentheses
+    stack = []
+    for char in expr:
+        if char == '(':
+            stack.append(char)
+        elif char == ')':
+            if not stack:
+                raise ValueError("Unbalanced parentheses")
+            stack.pop()
+    if stack:
+        raise ValueError("Unbalanced parentheses")
+
+    return expr
+
+def main():
+    print("Simple Calculator")
+    print("Enter a mathematical expression (e.g., 2 + 3 * (4 - 1)) or 'quit' to exit.")
+
+    while True:
+        try:
+            expr = input("> ")
+            if expr.lower() in ('quit', 'exit'):
+                break
+
+            # Sanitize the input
+            expr = sanitize_input(expr)
+
+            # Evaluate the expression safely
+            result = safe_eval(expr)
+
+            print(f"Result: {result}")
+
+        except ValueError as e:
+            print(f"Error: {e}")
+        except ZeroDivisionError:
+            print("Error: Division by zero")
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
+```

@@ -1,0 +1,64 @@
+import json
+import base64
+import hmac
+import hashlib
+from typing import Dict, Any, Optional
+from itsdangerous import URLSafeSerializer, BadSignature
+
+# Configuración segura (debería venir de variables de entorno en producción)
+SECRET_KEY = b'your-very-secure-secret-key-at-least-32-bytes-long'  # Mínimo 32 bytes para HMAC-SHA256
+SALT = 'session-salt'  # Sal único para las sesiones
+SERIALIZER = URLSafeSerializer(SECRET_KEY, salt=SALT)
+
+def reconstruct_session(cookie_value: bytes) -> Optional[Dict[str, Any]]:
+    """
+    Reconstruye un objeto de sesión a partir de una cookie firmada de manera segura.
+
+    Args:
+        cookie_value: Valor de la cookie de sesión en bytes.
+
+    Returns:
+        Diccionario con los datos de sesión si la firma es válida, None en caso contrario.
+
+    Security Considerations:
+        - Usa HMAC con SHA-256 para firmar los datos
+        - Verifica la integridad de los datos antes de deserializar
+        - Maneja errores de manera segura (sin exponer información sensible)
+        - Usa una sal única para las sesiones
+        - La clave secreta debe ser suficientemente larga y aleatoria
+        - No confía en los datos del cliente sin verificación
+    """
+    if not cookie_value:
+        return None
+
+    try:
+        # Decodificar de bytes a string si es necesario
+        if isinstance(cookie_value, bytes):
+            cookie_str = cookie_value.decode('utf-8')
+        else:
+            cookie_str = str(cookie_value)
+
+        # Verificar y deserializar los datos firmados
+        session_data = SERIALIZER.loads(cookie_str)
+
+        # Validaciones adicionales de seguridad
+        if not isinstance(session_data, dict):
+            return None
+
+        # Prevenir ataques de deserialización (ej: pickle)
+        if not all(isinstance(k, str) and isinstance(v, (str, int, float, bool, list, dict)) for k, v in session_data.items()):
+            return None
+
+        return session_data
+
+    except (BadSignature, json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+        # En producción, registrar el error sin exponer detalles (logging.error("Invalid session cookie"))
+        return None
+    except Exception:
+        # Manejar cualquier otra excepción de manera segura
+        return None
+
+# Ejemplo de uso seguro:
+# session_data = {"user_id": 123, "is_admin": False}
+# signed_cookie = SERIALIZER.dumps(session_data)
+# reconstructed = reconstruct_session(signed_cookie.encode('utf-8'))

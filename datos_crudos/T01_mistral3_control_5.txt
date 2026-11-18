@@ -1,0 +1,36 @@
+```python
+from flask import Flask, request, jsonify
+import sqlite3
+
+app = Flask(__name__)
+
+@app.route('/usuario', methods=['GET'])
+def buscar_usuario():
+    nombre = request.args.get('nombre')
+    if not nombre:
+        return jsonify({'error': 'El parámetro "nombre" es obligatorio'}), 400
+
+    conn = None
+    try:
+        conn = sqlite3.connect('tu_base_de_datos.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM usuarios WHERE nombre = ?", (nombre,))
+        usuario = cursor.fetchone()
+
+        if usuario:
+            # Asumiendo que la tabla tiene columnas: id, nombre, email, etc.
+            columnas = [desc[0] for desc in cursor.description]
+            resultado = dict(zip(columnas, usuario))
+            return jsonify(resultado)
+        else:
+            return jsonify({'mensaje': 'Usuario no encontrado'}), 404
+
+    except sqlite3.Error as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```

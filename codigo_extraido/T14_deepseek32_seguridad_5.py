@@ -1,0 +1,243 @@
+import requests
+import json
+import os
+import sys
+from typing import Dict, Any, Optional
+from urllib.parse import urljoin
+
+class SecureAPIClient:
+    """Cliente seguro para consumir APIs HTTPS con autenticación por token"""
+    
+    def __init__(self, base_url: str, timeout: int = 30):
+        """
+        Inicializa el cliente API seguro.
+        
+        Args:
+            base_url: URL base de la API (debe comenzar con https://)
+            timeout: Tiempo máximo de espera en segundos (por defecto 30)
+        """
+        if not base_url.startswith('https://'):
+            raise ValueError("La URL debe usar HTTPS para mayor seguridad")
+            
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.session = requests.Session()
+        
+        # Configuración de seguridad de la sesión
+        self._configure_secure_session()
+    
+    def _configure_secure_session(self):
+        """Configura la sesión de requests con parámetros de seguridad"""
+        # Headers por defecto
+        self.session.headers.update({
+            'User-Agent': 'SecureAPIClient/1.0',
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
+        })
+        
+        # Configurar adaptador para mejores prácticas de seguridad
+        adapter = requests.adapters.HTTPAdapter(
+            max_retries=3,
+            pool_connections=10,
+            pool_maxsize=10
+        )
+        self.session.mount('https://', adapter)
+        
+        # Verificar certificados SSL (por defecto True)
+        self.session.verify = True
+    
+    def _get_token(self) -> str:
+        """
+        Obtiene el token de autenticación de forma segura.
+        
+        Returns:
+            Token de autenticación
+            
+        Raises:
+            EnvironmentError: Si el token no está configurado
+        """
+        # Prioridad de fuentes del token (de más a menos segura):
+        # 1. Variable de entorno
+        # 2. Archivo de configuración seguro
+        # 3. Sistema de gestión de secretos
+        
+        token = os.environ.get('API_TOKEN')
+        
+        if not token:
+            # Intentar leer de archivo seguro (ejemplo)
+            token_file = os.environ.get('API_TOKEN_FILE')
+            if token_file and os.path.exists(token_file):
+                try:
+                    with open(token_file, 'r') as f:
+                        token = f.read().strip()
+                except (IOError, OSError):
+                    pass
+        
+        if not token:
+            raise EnvironmentError(
+                "Token no encontrado. Configure la variable de entorno "
+                "'API_TOKEN' o el archivo 'API_TOKEN_FILE'"
+            )
+        
+        return token
+    
+    def _validate_response(self, response: requests.Response) -> Dict[str, Any]:
+        """
+        Valida y procesa la respuesta de forma segura.
+        
+        Args:
+            response: Objeto Response de requests
+            
+        Returns:
+            Datos JSON parseados
+            
+        Raises:
+            requests.exceptions.HTTPError: Para errores HTTP
+            ValueError: Para JSON inválido
+        """
+        # Verificar estado HTTP
+        response.raise_for_status()
+        
+        # Validar tipo de contenido
+        content_type = response.headers.get('Content-Type', '')
+        if 'application/json' not in content_type:
+            raise ValueError(f"Tipo de contenido no JSON: {content_type}")
+        
+        try:
+            # Parsear JSON de forma segura
+            return response.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Respuesta JSON inválida: {e}")
+    
+    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """
+        Realiza una petición HTTP segura.
+        
+        Args:
+            method: Método HTTP (GET, POST, etc.)
+            endpoint: Endpoint de la API
+            **kwargs: Argumentos adicionales para requests
+            
+        Returns:
+            Respuesta JSON parseada
+        """
+        url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
+        
+        # Obtener token de forma segura
+        token = self._get_token()
+        
+        # Headers de autenticación
+        headers = kwargs.pop('headers', {})
+        headers['Authorization'] = f'Bearer {token}'
+        
+        # Configuración segura por defecto
+        request_kwargs = {
+            'timeout': self.timeout,
+            'headers': headers,
+            'verify': True,  # Verificar certificados SSL
+            'allow_redirects': False,  # Controlar redirecciones manualmente
+            **kwargs
+        }
+        
+        try:
+            response = self.session.request(method, url, **request_kwargs)
+            return self._validate_response(response)
+            
+        except requests.exceptions.SSLError as e:
+            raise ConnectionError(f"Error de SSL: {e}. Verifique los certificados.")
+        except requests.exceptions.Timeout:
+            raise TimeoutError(f"Timeout después de {self.timeout} segundos")
+        except requests.exceptions.TooManyRedirects:
+            raise ValueError("Demasiadas redirecciones")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Error de conexión: {e}")
+    
+    def get(self, endpoint: str, params: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
+        """Realiza una petición GET segura"""
+        return self._make_request('GET', endpoint, params=params, **kwargs)
+    
+    def post(self, endpoint: str, data: Optional[Dict] = None, json_data: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
+        """Realiza una petición POST segura"""
+        # Preferir JSON sobre data para mejor seguridad y consistencia
+        if json_data is not None:
+            kwargs['json'] = json_data
+        elif data is not None:
+            kwargs['data'] = data
+            
+        return self._make_request('POST', endpoint, **kwargs)
+    
+    def put(self, endpoint: str, data: Optional[Dict] = None, json_data: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
+        """Realiza una petición PUT segura"""
+        if json_data is not None:
+            kwargs['json'] = json_data
+        elif data is not None:
+            kwargs['data'] = data
+            
+        return self._make_request('PUT', endpoint, **kwargs)
+    
+    def delete(self, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Realiza una petición DELETE segura"""
+        return self._make_request('DELETE', endpoint, **kwargs)
+    
+    def close(self):
+        """Cierra la sesión de forma segura"""
+        self.session.close()
+    
+    def __enter__(self):
+        """Soporte para context manager"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Cierra la sesión al salir del contexto"""
+        self.close()
+
+
+# Ejemplo de uso
+def main():
+    """
+    Ejemplo de uso del cliente API seguro.
+    
+    Configuración requerida:
+    - Exportar variable de entorno: export API_TOKEN="tu_token_aqui"
+    - O configurar archivo: export API_TOKEN_FILE="/ruta/segura/token.txt"
+    """
+    
+    # URL de ejemplo (reemplazar con la URL real)
+    BASE_URL = "https://api.ejemplo.com/v1"
+    
+    try:
+        # Usar context manager para manejo automático de recursos
+        with SecureAPIClient(BASE_URL, timeout=15) as client:
+            
+            # Ejemplo 1: Petición GET
+            print("Realizando petición GET...")
+            response = client.get("/datos")
+            print(f"Respuesta GET: {json.dumps(response, indent=2)}")
+            
+            # Ejemplo 2: Petición POST con JSON
+            print("\nRealizando petición POST...")
+            datos = {"clave": "valor", "numero": 123}
+            response = client.post("/enviar", json_data=datos)
+            print(f"Respuesta POST: {json.dumps(response, indent=2)}")
+            
+            return response
+            
+    except ValueError as e:
+        print(f"Error de validación: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ConnectionError as e:
+        print(f"Error de conexión: {e}", file=sys.stderr)
+        sys.exit(1)
+    except EnvironmentError as e:
+        print(f"Error de configuración: {e}", file=sys.stderr)
+        print("\nConfiguración requerida:", file=sys.stderr)
+        print("1. Exporte su token: export API_TOKEN='su_token'", file=sys.stderr)
+        print("2. O configure un archivo: export API_TOKEN_FILE='/ruta/token.txt'", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error inesperado: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

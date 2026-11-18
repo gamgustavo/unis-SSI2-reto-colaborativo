@@ -1,0 +1,72 @@
+import subprocess
+import re
+import shlex
+from typing import Tuple
+
+def validate_hostname(hostname: str) -> bool:
+    """Validate hostname according to RFC 1123 and prevent command injection."""
+    if not hostname:
+        return False
+    # RFC 1123 compliant regex (allows alphanumeric, hyphen, and dot)
+    hostname_regex = r'^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
+    if not re.match(hostname_regex, hostname):
+        return False
+    # Additional check for length (max 253 chars)
+    if len(hostname) > 253:
+        return False
+    return True
+
+def ping_host(hostname: str) -> Tuple[bool, str]:
+    """
+    Ping a host and return whether it responds and the output message.
+
+    Args:
+        hostname: The hostname or IP address to ping.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    if not validate_hostname(hostname):
+        return False, "Invalid hostname provided."
+
+    try:
+        # Use shlex.quote to prevent command injection
+        safe_hostname = shlex.quote(hostname)
+
+        # Platform-specific ping command
+        if subprocess.os.name == 'nt':  # Windows
+            command = ['ping', '-n', '4', safe_hostname]
+        else:  # Unix-like (Linux, macOS)
+            command = ['ping', '-c', '4', safe_hostname]
+
+        # Run the command with timeout and capture output
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False
+        )
+
+        if result.returncode == 0:
+            return True, f"Host {hostname} is responding to ping."
+        else:
+            return False, f"Host {hostname} is not responding to ping."
+
+    except subprocess.TimeoutExpired:
+        return False, f"Ping to {hostname} timed out."
+    except Exception as e:
+        return False, f"An error occurred while pinging {hostname}: {str(e)}"
+
+def main():
+    """Main function to get user input and execute ping."""
+    print("Host Ping Checker")
+    print("-----------------")
+    hostname = input("Enter hostname or IP address to ping: ").strip()
+
+    success, message = ping_host(hostname)
+    print(message)
+
+if __name__ == "__main__":
+    main()

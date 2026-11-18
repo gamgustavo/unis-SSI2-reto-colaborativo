@@ -1,0 +1,62 @@
+```python
+import jwt
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+
+# Configuración
+SECRET_KEY = "tu_secreto_super_seguro"  # Cambia esto por una clave secreta segura en producción
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Crea un token JWT de acceso.
+
+    Args:
+        data: Diccionario con los datos a codificar en el token.
+        expires_delta: Tiempo de expiración del token. Si no se proporciona, usa el valor por defecto.
+
+    Returns:
+        Token JWT codificado como string.
+    """
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verifica un token JWT y devuelve los datos decodificados si es válido.
+
+    Args:
+        token: Token JWT a verificar.
+
+    Returns:
+        Diccionario con los datos decodificados si el token es válido, None en caso contrario.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.PyJWTError:
+        return None
+
+def get_token_data(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene los datos de un token JWT sin verificar su expiración.
+
+    Args:
+        token: Token JWT a decodificar.
+
+    Returns:
+        Diccionario con los datos decodificados si el token es válido, None en caso contrario.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
+        return payload
+    except jwt.PyJWTError:
+        return None
+```

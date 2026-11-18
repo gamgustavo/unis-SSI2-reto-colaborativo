@@ -1,0 +1,22 @@
+from flask import Flask, request, send_file, abort
+import os
+
+app = Flask(__name__)
+
+DOCUMENTS_FOLDER = 'documentos'
+
+@app.route('/get_document', methods=['GET'])
+def get_document():
+    file_name = request.args.get('file_name')
+    if not file_name:
+        abort(400, description="File name is required")
+    
+    file_path = os.path.join(DOCUMENTS_FOLDER, file_name)
+    
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        abort(404, description="File not found")
+    
+    return send_file(file_path, as_attachment=True)
+
+if __name__ == '__main__':
+    app.run(debug=True)

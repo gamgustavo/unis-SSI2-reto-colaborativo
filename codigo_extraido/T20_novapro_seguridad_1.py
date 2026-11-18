@@ -1,0 +1,41 @@
+import os
+import zipfile
+from zipfile import ZipFile
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+def extract_zip(uploaded_file_path, destination_folder='descargas'):
+    # Asegurarse de que el nombre de la carpeta de destino es seguro
+    destination_folder = os.path.normpath(destination_folder)
+    
+    # Crear la carpeta de destino si no existe
+    Path(destination_folder).mkdir(parents=True, exist_ok=True)
+    
+    # Usar un directorio temporal para extraer el contenido
+    with TemporaryDirectory() as temp_dir:
+        try:
+            with ZipFile(uploaded_file_path, 'r') as zip_ref:
+                # Iterar sobre los contenidos del archivo ZIP
+                for file_info in zip_ref.infolist():
+                    # Normalizar el nombre del archivo para evitar rutas relativas maliciosas
+                    safe_filename = os.path.normpath(file_info.filename)
+                    
+                    # Verificar que el archivo no intenta salir de la carpeta temporal
+                    if not safe_filename.startswith(os.path.sep) and '..' not in safe_filename:
+                        # Extraer el archivo en el directorio temporal
+                        zip_ref.extract(file_info, temp_dir)
+                        
+                        # Mover el archivo extraído a la carpeta de destino
+                        extracted_file_path = os.path.join(temp_dir, safe_filename)
+                        if os.path.isfile(extracted_file_path):
+                            dest_file_path = os.path.join(destination_folder, os.path.basename(safe_filename))
+                            os.replace(extracted_file_path, dest_file_path)
+                    else:
+                        print(f"Archivo malicioso detectado: {safe_filename}")
+        except zipfile.BadZipFile:
+            print("El archivo ZIP está corrupto o no es un archivo ZIP válido.")
+        except Exception as e:
+            print(f"Ocurrió un error al extraer el archivo ZIP: {e}")
+
+# Ejemplo de uso
+# extract_zip('ruta/al/archivo.zip')

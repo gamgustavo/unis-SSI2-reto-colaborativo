@@ -1,0 +1,56 @@
+import subprocess
+import platform
+import sys
+
+def ping_host(hostname):
+    """
+    Realiza un ping al host especificado y devuelve si responde o no.
+    
+    Args:
+        hostname (str): Nombre del host o dirección IP a hacer ping.
+    
+    Returns:
+        bool: True si el host responde, False en caso contrario.
+    """
+    # Parámetros según el sistema operativo
+    if platform.system().lower() == "windows":
+        param = "-n"
+        timeout_param = "-w"
+    else:
+        param = "-c"
+        timeout_param = "-W"
+    
+    # Construir el comando
+    command = ["ping", param, "4", timeout_param, "2000", hostname]
+    
+    try:
+        # Ejecutar el ping
+        output = subprocess.run(command, 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        
+        # Verificar el código de retorno
+        if output.returncode == 0:
+            return True
+        else:
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print(f"Timeout al intentar hacer ping a {hostname}")
+        return False
+    except Exception as e:
+        print(f"Error al ejecutar ping: {e}")
+        return False
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        host = sys.argv[1]
+    else:
+        host = input("Ingrese el nombre del host o dirección IP: ")
+    
+    print(f"\nHaciendo ping a {host}...")
+    if ping_host(host):
+        print(f"✓ El host {host} responde al ping.")
+    else:
+        print(f"✗ El host {host} NO responde al ping.")

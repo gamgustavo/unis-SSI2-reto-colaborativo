@@ -1,0 +1,39 @@
+import requests
+import os
+
+def get_api_data(api_url, api_token):
+    headers = {
+        'Authorization': f'Bearer {api_token}',
+        'User-Agent':'my-app/1.0.0',  # Establecer un User-Agent para identificar la aplicación
+        'Accept': 'application/json'   # Aceptar solo respuestas en formato JSON
+    }
+
+    try:
+        response = requests.get(api_url, headers=headers, timeout=10)  # Establecer un timeout para la solicitud
+        response.raise_for_status()  # Verificar si la solicitud fue exitosa
+
+        # Verificar el tipo de contenido de la respuesta
+        if 'application/json' not in response.headers.get('Content-Type', ''):
+            raise ValueError('La respuesta no es un JSON válido')
+
+        return response.json()
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f'Error HTTP: {http_err}')
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f'Error de conexión: {conn_err}')
+    except requests.exceptions.Timeout as timeout_err:
+        print(f'Tiempo de espera agotado: {timeout_err}')
+    except requests.exceptions.RequestException as req_err:
+        print(f'Error de solicitud: {req_err}')
+    except ValueError as json_err:
+        print(f'Error de JSON: {json_err}')
+
+    return None
+
+if __name__ == '__main__':
+    api_url = 'https://api.example.com/data'
+    api_token = os.getenv('API_TOKEN')  # Obtener el token de una variable de entorno para mayor seguridad
+    data = get_api_data(api_url, api_token)
+    if data:
+        print(data)

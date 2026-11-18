@@ -1,0 +1,113 @@
+```python
+import os
+from flask import Flask, request, jsonify, send_file, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración
+DOCUMENTS_FOLDER = 'documentos'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'md', 'csv', 'json', 'xml'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB límite
+
+# Validar extensión del archivo
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# Validar ruta segura
+def is_safe_path(base_path, target_path):
+    # Resolver la ruta absoluta y verificar que esté dentro del directorio base
+    abs_base = os.path.abspath(base_path)
+    abs_target = os.path.abspath(target_path)
+    return abs_target.startswith(abs_base)
+
+@app.route('/get-file', methods=['GET'])
+def get_file_content():
+    """
+    Endpoint para obtener el contenido de un archivo.
+    Parámetro: filename (nombre del archivo)
+    """
+    # Obtener nombre del archivo desde los parámetros de consulta
+    filename = request.args.get('filename')
+    
+    # Validar que se proporcionó un nombre de archivo
+    if not filename:
+        return jsonify({'error': 'Nombre de archivo no proporcionado'}), 400
+    
+    # Sanitizar el nombre del archivo
+    safe_filename = secure_filename(filename)
+    
+    # Validar que el nombre sanitizado no esté vacío
+    if not safe_filename:
+        return jsonify({'error': 'Nombre de archivo inválido'}), 400
+    
+    # Validar extensión permitida
+    if not allowed_file(safe_filename):
+        return jsonify({'error': 'Tipo de archivo no permitido'}), 400
+    
+    # Construir ruta completa
+    base_path = os.path.abspath(DOCUMENTS_FOLDER)
+    file_path = os.path.join(base_path, safe_filename)
+    
+    # Validar que la ruta sea segura (prevención de path traversal)
+    if not is_safe_path(base_path, file_path):
+        return jsonify({'error': 'Ruta de archivo no válida'}), 400
+    
+    # Verificar que el archivo exista
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'Archivo no encontrado'}), 404
+    
+    # Verificar que sea un archivo (no un directorio)
+    if not os.path.isfile(file_path):
+        return jsonify({'error': 'La ruta especificada no es un archivo'}), 400
+    
+    # Verificar tamaño del archivo
+    file_size = os.path.getsize(file_path)
+    if file_size > MAX_FILE_SIZE:
+        return jsonify({'error': 'Archivo demasiado grande'}), 413
+    
+    try:
+        # Leer el contenido del archivo según su tipo
+        file_extension = safe_filename.rsplit('.', 1)[1].lower()
+        
+        if file_extension in {'txt', 'md', 'csv', 'json', 'xml'}:
+            # Archivos de texto: leer como texto
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                content = file.read()
+            
+            return jsonify({
+                'filename': safe_filename,
+                'content': content,
+                'size': file_size,
+                'type': 'text'
+            })
+        
+        else:
+            # Archivos binarios: devolver como descarga
+            return send_file(
+                file_path,
+                as_attachment=False,
+                download_name=safe_filename,
+                mimetype='application/octet-stream'
+            )
+            
+    except PermissionError:
+        return jsonify({'error': 'Permiso denegado para acceder al archivo'}), 403
+    except IOError as e:
+        return jsonify({'error': f'Error al leer el archivo: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Error interno del servidor: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    # Crear la carpeta de documentos si no existe
+    if not os.path.exists(DOCUMENTS_FOLDER):
+        os.makedirs(DOCUMENTS_FOLDER)
+    
+    # Configuración de seguridad para producción
+    app.config['JSON_SORT_KEYS'] = False
+    app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+    
+    # Ejecutar en modo desarrollo (en producción usar servidor WSGI)
+    app.run(debug=False, host='0.0.0.0', port=5000)
+```

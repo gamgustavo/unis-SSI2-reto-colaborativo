@@ -1,0 +1,70 @@
+```python
+from flask import Flask, request, jsonify
+import sqlite3
+import os
+
+app = Flask(__name__)
+
+# Ruta de la base de datos (se crea en el mismo directorio)
+DATABASE = 'usuarios.db'
+
+def init_db():
+    """Inicializa la base de datos con una tabla de ejemplo si no existe"""
+    if not os.path.exists(DATABASE):
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                email TEXT,
+                edad INTEGER
+            )
+        ''')
+        # Insertar datos de ejemplo
+        cursor.execute("INSERT INTO usuarios (nombre, email, edad) VALUES ('Juan', 'juan@email.com', 30)")
+        cursor.execute("INSERT INTO usuarios (nombre, email, edad) VALUES ('Maria', 'maria@email.com', 25)")
+        cursor.execute("INSERT INTO usuarios (nombre, email, edad) VALUES ('Pedro', 'pedro@email.com', 35)")
+        conn.commit()
+        conn.close()
+
+def get_db_connection():
+    """Crea una conexión a la base de datos"""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row  # Permite acceder a las columnas por nombre
+    return conn
+
+@app.route('/buscar_usuario', methods=['GET'])
+def buscar_usuario():
+    """Endpoint que busca un usuario por nombre"""
+    nombre = request.args.get('nombre')
+    
+    if not nombre:
+        return jsonify({'error': 'El parámetro "nombre" es requerido'}), 400
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Buscar usuario por nombre (búsqueda exacta)
+        cursor.execute('SELECT * FROM usuarios WHERE nombre = ?', (nombre,))
+        usuario = cursor.fetchone()
+        
+        conn.close()
+        
+        if usuario:
+            # Convertir el resultado a diccionario
+            usuario_dict = dict(usuario)
+            return jsonify(usuario_dict)
+        else:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+            
+    except sqlite3.Error as e:
+        return jsonify({'error': f'Error de base de datos: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    init_db()  # Inicializar la base de datos al iniciar la aplicación
+    app.run(debug=True, port=5000)
+```

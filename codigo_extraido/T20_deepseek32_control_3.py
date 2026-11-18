@@ -1,0 +1,50 @@
+import os
+import zipfile
+from pathlib import Path
+
+def extraer_zip(archivo_zip, carpeta_destino='descargas'):
+    """
+    Extrae el contenido de un archivo ZIP en la carpeta especificada.
+    
+    Args:
+        archivo_zip: Ruta del archivo ZIP a extraer
+        carpeta_destino: Carpeta donde se extraerán los archivos (por defecto 'descargas')
+    
+    Returns:
+        str: Ruta de la carpeta donde se extrajeron los archivos
+    """
+    # Crear la carpeta de destino si no existe
+    carpeta_destino = Path(carpeta_destino)
+    carpeta_destino.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Verificar que el archivo existe
+        if not os.path.exists(archivo_zip):
+            raise FileNotFoundError(f"El archivo {archivo_zip} no existe")
+        
+        # Verificar que es un archivo ZIP
+        if not zipfile.is_zipfile(archivo_zip):
+            raise ValueError(f"El archivo {archivo_zip} no es un archivo ZIP válido")
+        
+        # Extraer el contenido del ZIP
+        with zipfile.ZipFile(archivo_zip, 'r') as zip_ref:
+            # Extraer todos los archivos
+            zip_ref.extractall(carpeta_destino)
+            
+            # Obtener lista de archivos extraídos
+            archivos_extraidos = zip_ref.namelist()
+            
+            print(f"Archivo {archivo_zip} extraído exitosamente")
+            print(f"Archivos extraídos: {len(archivos_extraidos)}")
+            print(f"Ubicación: {carpeta_destino.absolute()}")
+            
+            return str(carpeta_destino.absolute())
+            
+    except zipfile.BadZipFile:
+        raise ValueError(f"El archivo {archivo_zip} está corrupto o no es un ZIP válido")
+    except Exception as e:
+        raise Exception(f"Error al extraer el archivo ZIP: {str(e)}")
+
+# Ejemplo de uso:
+# extraer_zip('archivo.zip')
+# extraer_zip('archivo.zip', 'mi_carpeta_descargas')

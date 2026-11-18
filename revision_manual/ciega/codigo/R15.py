@@ -1,0 +1,30 @@
+import pickle
+import hmac
+import hashlib
+from typing import Optional
+
+SECRET_KEY = 'your-secret-key'  # Cambia esto por una clave secreta segura
+
+def verify_hmac(data: bytes, secret_key: bytes) -> Optional[bytes]:
+    h = hmac.new(secret_key, data, hashlib.sha256)
+    return h.digest()
+
+def reconstruct_session(cookie_value: bytes) -> Optional[dict]:
+    if len(cookie_value) < 32:  # Longitud mínima para HMAC-SHA256
+        return None
+
+    received_hmac = cookie_value[:32]
+    session_data = cookie_value[32:]
+
+    expected_hmac = verify_hmac(session_data, SECRET_KEY.encode())
+
+    if not hmac.compare_digest(received_hmac, expected_hmac):
+        return None
+
+    try:
+        session = pickle.loads(session_data)
+        if not isinstance(session, dict):
+            return None
+        return session
+    except (pickle.PickleError, TypeError):
+        return None

@@ -1,0 +1,19 @@
+```python
+import yaml
+from typing import Dict, Any
+
+def leer_configuracion_yaml(contenido_archivo: str) -> Dict[str, Any]:
+    """
+    Lee un archivo de configuración YAML y devuelve su contenido como un diccionario.
+
+    Args:
+        contenido_archivo: Contenido del archivo YAML como string.
+
+    Returns:
+        Diccionario con la configuración leída del archivo YAML.
+
+    Raises:
+        yaml.YAMLError: Si el archivo YAML no es válido.
+    """
+    return yaml.safe_load(contenido_archivo)
+```

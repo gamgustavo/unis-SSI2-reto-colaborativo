@@ -1,0 +1,43 @@
+```python
+import psycopg2
+from psycopg2 import sql
+
+def listar_clientes():
+    try:
+        # Establecer la conexión a la base de datos
+        connection = psycopg2.connect(
+            dbname="nombre_de_la_base_de_datos",
+            user="usuario",
+            password="contraseña",
+            host="localhost",
+            port="5432"
+        )
+
+        # Crear un cursor para ejecutar consultas
+        cursor = connection.cursor()
+
+        # Escribir la consulta SQL para listar las filas de la tabla clientes
+        query = sql.SQL("SELECT * FROM {}").format(sql.Identifier('clientes'))
+
+        # Ejecutar la consulta
+        cursor.execute(query)
+
+        # Obtener todos los resultados
+        rows = cursor.fetchall()
+
+        # Imprimir los resultados
+        for row in rows:
+            print(row)
+
+    except (Exception, psycopg2.Error) as error:
+        print("Error al conectar a la base de datos:", error)
+
+    finally:
+        # Cerrar la conexión y el cursor
+        if connection:
+            cursor.close()
+            connection.close()
+
+# Llamar a la función para listar los clientes
+listar_clientes()
+```

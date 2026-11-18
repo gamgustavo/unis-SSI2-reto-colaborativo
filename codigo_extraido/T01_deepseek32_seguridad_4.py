@@ -1,0 +1,83 @@
+from flask import Flask, request, jsonify
+import sqlite3
+import re
+
+app = Flask(__name__)
+
+def get_db_connection():
+    """Establece conexión segura con la base de datos"""
+    conn = sqlite3.connect('database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def validate_input(nombre):
+    """Valida que el nombre cumpla con un patrón seguro"""
+    # Permitir letras, números, espacios y algunos caracteres comunes
+    # Ajustar según los requisitos específicos de la aplicación
+    if not nombre or len(nombre) > 100:
+        return False
+    
+    # Patrón seguro: letras, números, espacios y caracteres acentuados comunes
+    pattern = r'^[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s\-\.\']+$'
+    return bool(re.match(pattern, nombre))
+
+@app.route('/buscar-usuario', methods=['GET'])
+def buscar_usuario():
+    """Endpoint para buscar usuario por nombre"""
+    # Obtener y validar parámetro
+    nombre = request.args.get('nombre')
+    
+    if not nombre:
+        return jsonify({'error': 'El parámetro "nombre" es requerido'}), 400
+    
+    # Validar entrada
+    if not validate_input(nombre):
+        return jsonify({'error': 'Nombre contiene caracteres no permitidos'}), 400
+    
+    conn = None
+    try:
+        # Conexión segura a la base de datos
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Consulta parametrizada para prevenir SQL injection
+        query = "SELECT id, nombre, email, fecha_creacion FROM usuarios WHERE nombre = ?"
+        cursor.execute(query, (nombre,))
+        
+        usuario = cursor.fetchone()
+        
+        if usuario:
+            # Convertir resultado a diccionario
+            resultado = dict(usuario)
+            return jsonify(resultado), 200
+        else:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+            
+    except sqlite3.Error as e:
+        # Log del error (en producción usar logging apropiado)
+        app.logger.error(f"Error de base de datos: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    except Exception as e:
+        # Capturar cualquier otro error inesperado
+        app.logger.error(f"Error inesperado: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+        
+    finally:
+        # Asegurar cierre de conexión
+        if conn:
+            conn.close()
+
+# Configuración de seguridad adicional
+@app.after_request
+def add_security_headers(response):
+    """Añadir headers de seguridad HTTP"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
+
+if __name__ == '__main__':
+    # En producción, usar servidor WSGI como Gunicorn
+    # y desactivar debug mode
+    app.run(debug=False, host='0.0.0.0', port=5000)

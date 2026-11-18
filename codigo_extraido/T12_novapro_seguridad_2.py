@@ -1,0 +1,21 @@
+import yaml
+import os
+
+def read_yaml_config(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            config = yaml.safe_load(file)
+            return config
+    except yaml.YAMLError as e:
+        print(f"Error parsing YAML file: {e}")
+        return None
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+# Ejemplo de uso
+# config = read_yaml_config('path/to/your/config.yaml')
+# print(config)

@@ -1,0 +1,144 @@
+```python
+import os
+import secrets
+import hashlib
+import hmac
+import time
+from typing import Optional, Tuple
+from dataclasses import dataclass
+
+# Configuración segura (en producción, usa variables de entorno o un sistema de configuración seguro)
+RESET_TOKEN_SECRET = os.getenv('RESET_TOKEN_SECRET', secrets.token_hex(32))
+RESET_TOKEN_EXPIRATION = 3600  # 1 hora en segundos
+TOKEN_LENGTH = 32  # Longitud del token en bytes (antes de codificación)
+
+@dataclass
+class PasswordResetToken:
+    token_hash: str
+    user_id: str
+    expires_at: float
+    used: bool = False
+
+class PasswordResetTokenManager:
+    def __init__(self):
+        # En producción, usa una base de datos real con índices adecuados
+        self.tokens = {}  # type: dict[str, PasswordResetToken]
+
+    def _generate_token_data(self) -> Tuple[str, str]:
+        """Genera un token seguro y su hash para almacenamiento"""
+        token = secrets.token_hex(TOKEN_LENGTH)
+        token_hash = self._hash_token(token)
+        return token, token_hash
+
+    def _hash_token(self, token: str) -> str:
+        """Hashea el token usando HMAC con una clave secreta"""
+        if not RESET_TOKEN_SECRET:
+            raise ValueError("RESET_TOKEN_SECRET no está configurado")
+        return hmac.new(
+            RESET_TOKEN_SECRET.encode('utf-8'),
+            token.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+    def _is_token_expired(self, expires_at: float) -> bool:
+        """Verifica si el token ha expirado"""
+        return time.time() > expires_at
+
+    def generate_reset_token(self, user_id: str) -> str:
+        """
+        Genera un token seguro para restablecer contraseña.
+
+        Args:
+            user_id: Identificador único del usuario
+
+        Returns:
+            str: Token seguro para enviar al usuario
+        """
+        if not user_id:
+            raise ValueError("user_id no puede estar vacío")
+
+        token, token_hash = self._generate_token_data()
+        expires_at = time.time() + RESET_TOKEN_EXPIRATION
+
+        # Almacenar el hash del token, no el token en sí
+        self.tokens[token_hash] = PasswordResetToken(
+            token_hash=token_hash,
+            user_id=user_id,
+            expires_at=expires_at
+        )
+
+        return token
+
+    def validate_reset_token(self, token: str, user_id: str) -> bool:
+        """
+        Valida un token de restablecimiento de contraseña.
+
+        Args:
+            token: Token proporcionado por el usuario
+            user_id: Identificador del usuario que solicita el restablecimiento
+
+        Returns:
+            bool: True si el token es válido, False en caso contrario
+
+        Raises:
+            ValueError: Si el token está malformado
+        """
+        if not token or not user_id:
+            return False
+
+        try:
+            token_hash = self._hash_token(token)
+        except Exception:
+            return False
+
+        stored_token = self.tokens.get(token_hash)
+        if not stored_token:
+            return False
+
+        # Verificar que el token no haya sido usado
+        if stored_token.used:
+            return False
+
+        # Verificar que el token no haya expirado
+        if self._is_token_expired(stored_token.expires_at):
+            return False
+
+        # Verificar que el token corresponda al usuario
+        if stored_token.user_id != user_id:
+            return False
+
+        # Marcar el token como usado para evitar reutilización
+        stored_token.used = True
+        return True
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configuración inicial (en producción, usa variables de entorno)
+    os.environ['RESET_TOKEN_SECRET'] = secrets.token_hex(32)
+
+    # Crear el gestor de tokens
+    token_manager = PasswordResetTokenManager()
+
+    # Simular un usuario
+    user_id = "user123"
+
+    # Generar un token
+    reset_token = token_manager.generate_reset_token(user_id)
+    print(f"Token generado: {reset_token}")
+
+    # Validar el token (debería ser válido)
+    is_valid = token_manager.validate_reset_token(reset_token, user_id)
+    print(f"Token válido: {is_valid}")
+
+    # Intentar validar con un usuario incorrecto
+    is_valid = token_manager.validate_reset_token(reset_token, "wrong_user")
+    print(f"Token con usuario incorrecto: {is_valid}")
+
+    # Intentar validar un token usado
+    is_valid = token_manager.validate_reset_token(reset_token, user_id)
+    print(f"Token reutilizado: {is_valid}")
+
+    # Intentar validar un token inexistente
+    is_valid = token_manager.validate_reset_token("invalid_token", user_id)
+    print(f"Token inválido: {is_valid}")
+```

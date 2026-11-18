@@ -1,0 +1,221 @@
+import os
+import jwt
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
+
+# Configuración segura de JWT
+class JWTConfig:
+    # Generar claves RSA en tiempo de ejecución (en producción, estas deberían ser persistentes y seguras)
+    _private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=4096,
+        backend=default_backend()
+    )
+    _public_key = _private_key.public_key()
+
+    # Obtener las claves en formato PEM
+    PRIVATE_KEY = _private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    PUBLIC_KEY = _public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    # Configuración de seguridad
+    ALGORITHM = "RS256"  # Algoritmo asimétrico para mayor seguridad
+    ACCESS_TOKEN_EXPIRE_MINUTES = 15  # Tiempo de vida corto para tokens de acceso
+    REFRESH_TOKEN_EXPIRE_DAYS = 7  # Tiempo de vida más largo para tokens de refresco
+    ISSUER = "auth_service"  # Identificador del emisor del token
+    AUDIENCE = "user_auth"  # Identificador de la audiencia del token
+
+    # Configuración de seguridad adicional
+    MAX_TOKEN_AGE = 30  # Máximo tiempo de vida permitido para cualquier token (en minutos)
+    CLOCK_SKEW_SECONDS = 10  # Tolerancia para diferencias de reloj entre sistemas
+
+def generate_jwt_token(
+    user_id: str,
+    username: str,
+    email: str,
+    token_type: str = "access",
+    additional_claims: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Genera un token JWT seguro con los claims necesarios.
+
+    Args:
+        user_id: Identificador único del usuario
+        username: Nombre de usuario
+        email: Correo electrónico del usuario
+        token_type: Tipo de token ("access" o "refresh")
+        additional_claims: Claims adicionales a incluir en el token
+
+    Returns:
+        str: Token JWT codificado
+    """
+    if additional_claims is None:
+        additional_claims = {}
+
+    # Validar tipo de token
+    if token_type not in ["access", "refresh"]:
+        raise ValueError("Invalid token type. Must be 'access' or 'refresh'")
+
+    # Configurar tiempo de expiración según tipo de token
+    if token_type == "access":
+        expire_minutes = JWTConfig.ACCESS_TOKEN_EXPIRE_MINUTES
+    else:
+        expire_minutes = JWTConfig.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60
+
+    # Validar que el tiempo de expiración no exceda el máximo permitido
+    if expire_minutes > JWTConfig.MAX_TOKEN_AGE:
+        raise ValueError(f"Token expiration exceeds maximum allowed age of {JWTConfig.MAX_TOKEN_AGE} minutes")
+
+    # Crear payload con claims estándar y personalizados
+    payload = {
+        "sub": str(user_id),  # Subject (identificador único del usuario)
+        "username": username,
+        "email": email,
+        "iat": int(time.time()),  # Issued at (momento de creación)
+        "exp": int(time.time()) + (expire_minutes * 60),  # Expiration time
+        "nbf": int(time.time()) - JWTConfig.CLOCK_SKEW_SECONDS,  # Not before (con tolerancia)
+        "iss": JWTConfig.ISSUER,  # Issuer
+        "aud": JWTConfig.AUDIENCE,  # Audience
+        "jti": os.urandom(16).hex(),  # JWT ID (identificador único del token)
+        "token_type": token_type,
+        **additional_claims
+    }
+
+    # Generar token con firma RSA
+    token = jwt.encode(
+        payload,
+        JWTConfig.PRIVATE_KEY,
+        algorithm=JWTConfig.ALGORITHM
+    )
+
+    return token
+
+def verify_jwt_token(token: str, expected_token_type: str = "access") -> Dict[str, Any]:
+    """
+    Verifica y decodifica un token JWT, aplicando todas las validaciones de seguridad necesarias.
+
+    Args:
+        token: Token JWT a verificar
+        expected_token_type: Tipo de token esperado ("access" o "refresh")
+
+    Returns:
+        Dict[str, Any]: Payload del token verificado
+
+    Raises:
+        jwt.ExpiredSignatureError: Si el token ha expirado
+        jwt.InvalidTokenError: Si el token es inválido por cualquier razón
+    """
+    try:
+        # Decodificar y verificar el token con todas las validaciones
+        payload = jwt.decode(
+            token,
+            JWTConfig.PUBLIC_KEY,
+            algorithms=[JWTConfig.ALGORITHM],
+            issuer=JWTConfig.ISSUER,
+            audience=JWTConfig.AUDIENCE,
+            options={
+                "require": ["sub", "iat", "exp", "nbf", "iss", "aud", "jti", "token_type"],
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iss": True,
+                "verify_aud": True,
+                "verify_signature": True
+            },
+            leeway=JWTConfig.CLOCK_SKEW_SECONDS  # Tolerancia para diferencias de reloj
+        )
+
+        # Validaciones adicionales
+        if payload["token_type"] != expected_token_type:
+            raise jwt.InvalidTokenError("Invalid token type")
+
+        # Verificar que el token no sea demasiado antiguo
+        current_time = time.time()
+        max_age = current_time - (JWTConfig.MAX_TOKEN_AGE * 60)
+        if payload["iat"] < max_age:
+            raise jwt.InvalidTokenError("Token is too old")
+
+        return payload
+
+    except jwt.PyJWTError as e:
+        # Manejar todos los errores de JWT de manera genérica para no filtrar información
+        raise jwt.InvalidTokenError("Invalid authentication token") from e
+
+def generate_token_pair(user_id: str, username: str, email: str) -> Dict[str, str]:
+    """
+    Genera un par de tokens (access y refresh) para un usuario.
+
+    Args:
+        user_id: Identificador único del usuario
+        username: Nombre de usuario
+        email: Correo electrónico del usuario
+
+    Returns:
+        Dict[str, str]: Diccionario con los tokens de acceso y refresco
+    """
+    access_token = generate_jwt_token(
+        user_id=user_id,
+        username=username,
+        email=email,
+        token_type="access"
+    )
+
+    refresh_token = generate_jwt_token(
+        user_id=user_id,
+        username=username,
+        email=email,
+        token_type="refresh"
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+def refresh_access_token(refresh_token: str) -> Dict[str, str]:
+    """
+    Genera un nuevo token de acceso utilizando un token de refresco válido.
+
+    Args:
+        refresh_token: Token de refresco válido
+
+    Returns:
+        Dict[str, str]: Nuevo token de acceso y token de refresco actualizado
+
+    Raises:
+        jwt.InvalidTokenError: Si el token de refresco es inválido
+    """
+    # Verificar el token de refresco
+    payload = verify_jwt_token(refresh_token, expected_token_type="refresh")
+
+    # Generar nuevo token de acceso
+    new_access_token = generate_jwt_token(
+        user_id=payload["sub"],
+        username=payload["username"],
+        email=payload["email"],
+        token_type="access"
+    )
+
+    # Generar nuevo token de refresco (opcional, depende de la estrategia de refresco)
+    new_refresh_token = generate_jwt_token(
+        user_id=payload["sub"],
+        username=payload["username"],
+        email=payload["email"],
+        token_type="refresh"
+    )
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer"
+    }

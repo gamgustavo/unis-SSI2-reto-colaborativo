@@ -1,0 +1,84 @@
+```python
+import os
+import zipfile
+import tempfile
+from pathlib import Path
+import shutil
+
+def extraer_zip_seguro(archivo_zip, carpeta_destino='descargas'):
+    """
+    Extrae de forma segura el contenido de un archivo ZIP subido por el usuario.
+
+    Args:
+        archivo_zip: Objeto de archivo subido (como FileStorage de Flask o similar).
+        carpeta_destino: Nombre de la carpeta donde se extraerán los archivos (por defecto 'descargas').
+
+    Returns:
+        str: Ruta de la carpeta donde se extrajeron los archivos.
+
+    Raises:
+        ValueError: Si el archivo no es un ZIP válido o contiene rutas peligrosas.
+        OSError: Si hay problemas al crear directorios o escribir archivos.
+    """
+    # Validar el nombre de la carpeta destino para evitar inyección de rutas
+    if not isinstance(carpeta_destino, str) or not carpeta_destino.isidentifier():
+        raise ValueError("Nombre de carpeta destino no válido")
+
+    # Crear la carpeta destino si no existe
+    ruta_destino = Path(carpeta_destino).resolve()
+    try:
+        ruta_destino.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise OSError(f"No se pudo crear la carpeta destino: {e}")
+
+    # Usar un directorio temporal para extraer primero y validar el contenido
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        try:
+            # Guardar el archivo ZIP temporalmente para procesarlo
+            temp_zip_path = temp_path / "uploaded.zip"
+            archivo_zip.save(temp_zip_path)
+
+            # Validar que el archivo es un ZIP válido
+            if not zipfile.is_zipfile(temp_zip_path):
+                raise ValueError("El archivo no es un ZIP válido")
+
+            # Procesar el ZIP
+            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                # Validar nombres de archivos para evitar directory traversal
+                for file_info in zip_ref.infolist():
+                    # Normalizar la ruta para evitar problemas con diferentes separadores
+                    file_path = Path(file_info.filename)
+
+                    # Verificar que el archivo no intente salir del directorio destino
+                    if file_path.is_absolute() or '..' in file_path.parts:
+                        raise ValueError(f"Ruta de archivo no permitida: {file_info.filename}")
+
+                    # Verificar que el archivo no sobrescriba archivos importantes del sistema
+                    if any(part.startswith(('.', '__')) for part in file_path.parts):
+                        raise ValueError(f"Nombre de archivo no permitido: {file_info.filename}")
+
+                # Extraer todos los archivos al directorio temporal
+                zip_ref.extractall(temp_path)
+
+            # Mover los archivos del directorio temporal al destino final
+            for item in temp_path.iterdir():
+                dest_item = ruta_destino / item.name
+
+                # Evitar sobrescribir archivos existentes
+                if dest_item.exists():
+                    raise OSError(f"El archivo {dest_item.name} ya existe en el destino")
+
+                if item.is_file():
+                    shutil.move(str(item), str(dest_item))
+                elif item.is_dir():
+                    shutil.move(str(item), str(dest_item))
+
+        except zipfile.BadZipFile:
+            raise ValueError("El archivo ZIP está corrupto o no es válido")
+        except Exception as e:
+            raise OSError(f"Error al procesar el archivo ZIP: {e}")
+
+    return str(ruta_destino)
+```

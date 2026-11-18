@@ -1,0 +1,38 @@
+from flask import Flask, request, redirect, url_for, render_template, session
+
+app = Flask(__name__)
+app.secret_key = 'tu_clave_secreta'  # Cambia esto por una clave secreta segura
+
+# Simulación de una base de datos de usuarios
+usuarios = {
+    'usuario1': 'contraseña1',
+    'usuario2': 'contraseña2'
+}
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        nombre_usuario = request.form['username']
+        contrasena = request.form['password']
+        next_page = request.args.get('next')  # Obtener el parámetro 'next'
+
+        if nombre_usuario in usuarios and usuarios[nombre_usuario] == contrasena:
+            session['usuario'] = nombre_usuario
+            if next_page:
+                return redirect(next_page)
+            else:
+                return redirect(url_for('inicio'))
+        else:
+            return render_template('login.html', error='Credenciales inválidas')
+    else:
+        return render_template('login.html')
+
+@app.route('/')
+def inicio():
+    if 'usuario' in session:
+        return f'Bienvenido, {session["usuario"]}'
+    else:
+        return redirect(url_for('login', next=request.url))
+
+if __name__ == '__main__':
+    app.run(debug=True)

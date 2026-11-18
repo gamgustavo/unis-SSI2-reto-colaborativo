@@ -1,0 +1,16 @@
+```python
+import os
+import platform
+
+def ping_host():
+    host = input("Introduce el nombre de host o dirección IP: ")
+    param = '-n' if platform.system().lower() == 'windows' else '-c'
+    response = os.system(f"ping {param} 4 {host}")
+    if response == 0:
+        print(f"{host} está respondiendo.")
+    else:
+        print(f"{host} no responde.")
+
+if __name__ == "__main__":
+    ping_host()
+```

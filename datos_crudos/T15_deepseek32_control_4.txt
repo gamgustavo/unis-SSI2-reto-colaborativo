@@ -1,0 +1,93 @@
+```python
+import tempfile
+import os
+import json
+
+def guardar_reporte_temporal(datos_reporte, formato='json'):
+    """
+    Guarda datos de un reporte en un archivo temporal y devuelve la ruta del archivo.
+    
+    Args:
+        datos_reporte: Los datos del reporte a guardar (pueden ser dict, list, str, etc.)
+        formato: Formato del archivo ('json', 'txt', 'csv'). Por defecto 'json'
+    
+    Returns:
+        str: Ruta completa del archivo temporal creado
+    """
+    try:
+        # Crear un archivo temporal con el sufijo adecuado según el formato
+        sufijos = {
+            'json': '.json',
+            'txt': '.txt',
+            'csv': '.csv'
+        }
+        
+        sufijo = sufijos.get(formato.lower(), '.tmp')
+        
+        # Crear archivo temporal con eliminación automática al cerrar
+        with tempfile.NamedTemporaryFile(mode='w', suffix=sufijo, delete=False) as temp_file:
+            ruta_archivo = temp_file.name
+            
+            # Escribir datos según el formato especificado
+            if formato.lower() == 'json':
+                # Si los datos son un string, asumir que ya es JSON válido
+                if isinstance(datos_reporte, str):
+                    temp_file.write(datos_reporte)
+                else:
+                    json.dump(datos_reporte, temp_file, indent=2, ensure_ascii=False)
+            
+            elif formato.lower() == 'txt':
+                if isinstance(datos_reporte, str):
+                    temp_file.write(datos_reporte)
+                else:
+                    temp_file.write(str(datos_reporte))
+            
+            elif formato.lower() == 'csv':
+                # Para CSV, esperamos una lista de listas o un string con formato CSV
+                if isinstance(datos_reporte, str):
+                    temp_file.write(datos_reporte)
+                elif isinstance(datos_reporte, list):
+                    for fila in datos_reporte:
+                        if isinstance(fila, list):
+                            temp_file.write(','.join(str(item) for item in fila) + '\n')
+                        else:
+                            temp_file.write(str(fila) + '\n')
+                else:
+                    temp_file.write(str(datos_reporte))
+            
+            else:
+                # Formato no reconocido, guardar como texto plano
+                temp_file.write(str(datos_reporte))
+        
+        return ruta_archivo
+    
+    except Exception as e:
+        raise Exception(f"Error al guardar el reporte temporal: {str(e)}")
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Ejemplo con datos JSON
+    datos_ejemplo = {
+        "reporte": "ventas",
+        "fecha": "2024-01-15",
+        "total": 1500.75,
+        "items": ["producto1", "producto2", "producto3"]
+    }
+    
+    # Guardar como JSON
+    ruta_json = guardar_reporte_temporal(datos_ejemplo, 'json')
+    print(f"Archivo JSON creado en: {ruta_json}")
+    
+    # Guardar como texto plano
+    ruta_txt = guardar_reporte_temporal("Reporte de ventas\nTotal: $1500.75", 'txt')
+    print(f"Archivo TXT creado en: {ruta_txt}")
+    
+    # Guardar como CSV
+    datos_csv = [
+        ["Producto", "Cantidad", "Precio"],
+        ["Laptop", "5", "1200"],
+        ["Mouse", "10", "25"]
+    ]
+    ruta_csv = guardar_reporte_temporal(datos_csv, 'csv')
+    print(f"Archivo CSV creado en: {ruta_csv}")
+```

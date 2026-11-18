@@ -1,0 +1,55 @@
+```python
+import datetime
+import hashlib
+
+def login(username, password, log_file='login_attempts.log'):
+    """
+    Función de inicio de sesión que registra cada intento en un archivo de log.
+    
+    Args:
+        username (str): Nombre de usuario proporcionado
+        password (str): Contraseña proporcionada
+        log_file (str): Ruta del archivo de log (por defecto 'login_attempts.log')
+    
+    Returns:
+        bool: True si el login es exitoso, False en caso contrario
+    """
+    
+    # Datos de usuario válidos (en un caso real, esto vendría de una base de datos)
+    valid_users = {
+        'admin': hashlib.sha256('admin123'.encode()).hexdigest(),
+        'usuario': hashlib.sha256('clave456'.encode()).hexdigest(),
+        'test': hashlib.sha256('test789'.encode()).hexdigest()
+    }
+    
+    # Obtener timestamp actual
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Hash de la contraseña proporcionada para comparación
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    # Verificar credenciales
+    login_successful = username in valid_users and valid_users[username] == password_hash
+    
+    # Preparar mensaje de log
+    status = "EXITOSO" if login_successful else "FALLIDO"
+    log_message = f"[{timestamp}] - Usuario: '{username}' - Contraseña: '{password}' - Estado: {status}\n"
+    
+    # Escribir en el archivo de log
+    try:
+        with open(log_file, 'a', encoding='utf-8') as file:
+            file.write(log_message)
+    except Exception as e:
+        print(f"Error al escribir en el log: {e}")
+        return False
+    
+    return login_successful
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    # Intentos de prueba
+    print(login("admin", "admin123"))  # True
+    print(login("admin", "wrongpass"))  # False
+    print(login("usuario", "clave456"))  # True
+    print(login("nonexistent", "password"))  # False
+```

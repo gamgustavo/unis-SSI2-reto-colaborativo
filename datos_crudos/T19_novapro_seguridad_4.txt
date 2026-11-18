@@ -1,0 +1,42 @@
+```python
+import hashlib
+import logging
+from datetime import datetime
+
+# Configuración del logger
+logging.basicConfig(filename='login_attempts.log', level=logging.INFO, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+
+def hash_password(password):
+    """Hashea una contraseña usando SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_credentials(username, hashed_password, users_db):
+    """Verifica las credenciales contra una base de datos de usuarios."""
+    if username in users_db and users_db[username] == hashed_password:
+        return True
+    return False
+
+def login(username, password, users_db):
+    """Función de inicio de sesión que registra intentos de login."""
+    hashed_password = hash_password(password)
+    attempt_successful = check_credentials(username, hashed_password, users_db)
+    
+    # Registro del intento de login
+    logging.info(f"Intento de login: usuario={username}, éxito={'Sí' if attempt_successful else 'No'}")
+    
+    if attempt_successful:
+        print("Inicio de sesión exitoso.")
+    else:
+        print("Credenciales incorrectas. Intento fallido.")
+
+# Ejemplo de uso
+users_db = {
+    'usuario1': hash_password('contraseña1'),
+    'usuario2': hash_password('contraseña2')
+}
+
+# Intentos de login
+login('usuario1', 'contraseña1', users_db)  # Debería ser exitoso
+login('usuario1', 'contraseña_incorrecta', users_db)  # Debería fallar
+```

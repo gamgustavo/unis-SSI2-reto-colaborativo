@@ -1,0 +1,59 @@
+import tempfile
+import os
+import json
+
+def guardar_reporte_temporal(datos_reporte, formato='json'):
+    """
+    Guarda datos de un reporte en un archivo temporal y devuelve la ruta.
+    
+    Args:
+        datos_reporte: Los datos del reporte a guardar (pueden ser dict, str, list, etc.)
+        formato: Formato del archivo ('json', 'txt', 'csv', etc.). Por defecto 'json'
+    
+    Returns:
+        str: Ruta completa del archivo temporal creado
+    """
+    try:
+        # Crear un archivo temporal con el sufijo apropiado
+        sufijo = f'.{formato}' if formato else ''
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=sufijo) as temp_file:
+            
+            if formato == 'json':
+                # Si los datos son un diccionario o lista, guardar como JSON
+                if isinstance(datos_reporte, (dict, list)):
+                    json.dump(datos_reporte, temp_file, indent=2, ensure_ascii=False)
+                else:
+                    # Si son string, intentar cargar como JSON primero
+                    try:
+                        datos_json = json.loads(datos_reporte)
+                        json.dump(datos_json, temp_file, indent=2, ensure_ascii=False)
+                    except:
+                        # Si no es JSON válido, guardar como texto
+                        temp_file.write(str(datos_reporte))
+            
+            elif formato == 'txt':
+                # Guardar como texto plano
+                temp_file.write(str(datos_reporte))
+            
+            elif formato == 'csv':
+                # Para CSV, asumimos que datos_reporte es una lista de listas o un string CSV
+                if isinstance(datos_reporte, list):
+                    import csv
+                    writer = csv.writer(temp_file)
+                    writer.writerows(datos_reporte)
+                else:
+                    temp_file.write(str(datos_reporte))
+            
+            else:
+                # Para otros formatos, guardar como texto
+                temp_file.write(str(datos_reporte))
+            
+            ruta_archivo = temp_file.name
+        
+        return ruta_archivo
+        
+    except Exception as e:
+        # En caso de error, limpiar cualquier archivo temporal creado
+        if 'temp_file' in locals() and os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+        raise Exception(f"Error al guardar el reporte temporal: {str(e)}")

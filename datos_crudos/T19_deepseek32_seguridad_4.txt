@@ -1,0 +1,210 @@
+```python
+import logging
+import hashlib
+import secrets
+import time
+from datetime import datetime
+from typing import Optional, Tuple
+import json
+import os
+
+# Configuración del logger
+LOG_FILE = "auth_attempts.log"
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+LOG_BACKUP_COUNT = 5
+
+# Configurar logging
+logger = logging.getLogger('auth_logger')
+logger.setLevel(logging.INFO)
+
+# Evitar logs duplicados
+if not logger.handlers:
+    # Handler para rotación de logs
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=MAX_LOG_SIZE,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding='utf-8'
+    )
+    
+    # Formato del log
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+# Simulación de base de datos de usuarios (en producción usar base de datos real)
+# Formato: username: (salt, password_hash)
+USERS_DB = {
+    "admin": (
+        "somesalt123",
+        hashlib.sha256(("somesalt123" + "SecurePass123!").encode()).hexdigest()
+    )
+}
+
+def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Hashea una contraseña con salt.
+    
+    Args:
+        password: Contraseña a hashear
+        salt: Salt opcional (si no se proporciona, se genera uno)
+    
+    Returns:
+        Tupla (salt, hash)
+    """
+    if salt is None:
+        salt = secrets.token_hex(16)
+    
+    # Usar PBKDF2 para mayor seguridad
+    password_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Número de iteraciones
+    ).hex()
+    
+    return salt, password_hash
+
+def verify_password(username: str, password: str) -> bool:
+    """
+    Verifica si la contraseña es correcta para el usuario.
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña a verificar
+    
+    Returns:
+        True si la contraseña es correcta, False en caso contrario
+    """
+    if username not in USERS_DB:
+        # Simular tiempo de verificación constante para evitar timing attacks
+        time.sleep(0.1)
+        return False
+    
+    salt, stored_hash = USERS_DB[username]
+    
+    # Verificar contraseña
+    _, password_hash = hash_password(password, salt)
+    
+    # Comparación segura para evitar timing attacks
+    return secrets.compare_digest(password_hash, stored_hash)
+
+def sanitize_input(input_string: str, max_length: int = 100) -> str:
+    """
+    Sanitiza la entrada del usuario.
+    
+    Args:
+        input_string: Cadena a sanitizar
+        max_length: Longitud máxima permitida
+    
+    Returns:
+        Cadena sanitizada
+    """
+    if not input_string:
+        return ""
+    
+    # Limitar longitud
+    if len(input_string) > max_length:
+        input_string = input_string[:max_length]
+    
+    # Eliminar caracteres peligrosos para inyección
+    dangerous_chars = ['\n', '\r', '\t', '\0']
+    for char in dangerous_chars:
+        input_string = input_string.replace(char, '')
+    
+    return input_string.strip()
+
+def log_auth_attempt(username: str, password: str, success: bool, ip_address: str = "unknown"):
+    """
+    Registra un intento de autenticación en el log.
+    
+    Args:
+        username: Nombre de usuario intentado
+        password: Contraseña intentada
+        success: Si el intento fue exitoso
+        ip_address: Dirección IP del cliente (opcional)
+    """
+    # Sanitizar entradas
+    sanitized_username = sanitize_input(username)
+    sanitized_ip = sanitize_input(ip_address, max_length=45)  # IPv6 máximo
+    
+    # No registrar la contraseña completa por seguridad
+    # Solo registrar si había contraseña y su longitud
+    password_info = {
+        "length": len(password) if password else 0,
+        "has_content": bool(password)
+    }
+    
+    # Crear mensaje de log seguro
+    log_data = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "username": sanitized_username,
+        "password_info": password_info,
+        "success": success,
+        "ip_address": sanitized_ip,
+        "event": "authentication_attempt"
+    }
+    
+    # Registrar como JSON estructurado
+    logger.info(json.dumps(log_data, ensure_ascii=False))
+
+def login(username: str, password: str, ip_address: str = "unknown") -> Tuple[bool, str]:
+    """
+    Función principal de inicio de sesión.
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña
+        ip_address: Dirección IP del cliente (opcional)
+    
+    Returns:
+        Tupla (éxito, mensaje)
+    """
+    # Validar entradas
+    if not username or not password:
+        log_auth_attempt(username or "", password or "", False, ip_address)
+        return False, "Usuario y contraseña son requeridos"
+    
+    if len(username) > 50:
+        log_auth_attempt(username, "", False, ip_address)
+        return False, "Nombre de usuario demasiado largo"
+    
+    if len(password) > 100:
+        log_auth_attempt(username, "", False, ip_address)
+        return False, "Contraseña demasiado larga"
+    
+    # Verificar credenciales
+    is_valid = verify_password(username, password)
+    
+    # Registrar intento
+    log_auth_attempt(username, password, is_valid, ip_address)
+    
+    if is_valid:
+        # En producción, aquí se generaría un token de sesión seguro
+        session_token = secrets.token_urlsafe(32)
+        return True, f"Autenticación exitosa. Token: {session_token}"
+    else:
+        return False, "Credenciales inválidas"
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Ejemplos de uso
+    print(login("admin", "SecurePass123!"))
+    print(login("admin", "wrongpassword"))
+    print(login("", ""))
+    print(login("admin" * 20, "password"))
+    
+    # Verificar que el log se creó
+    if os.path.exists(LOG_FILE):
+        print(f"\nLog creado en: {LOG_FILE}")
+        print("Primeras líneas del log:")
+        with open(LOG_FILE, 'r', encoding='utf-8') as f:
+            for _ in range(3):
+                line = f.readline()
+                if line:
+                    print(line.strip())
+```

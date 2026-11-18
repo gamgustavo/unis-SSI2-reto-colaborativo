@@ -1,0 +1,28 @@
+```python
+import jwt
+import datetime
+from jwt.exceptions import InvalidTokenError
+
+SECRET_KEY = "clave_secreta"  # Cambia esto por una clave segura en producción
+
+def generar_token_restablecer_contrasena(usuario_id):
+    payload = {
+        'usuario_id': usuario_id,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)  # Token válido por 1 hora
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+    return token
+
+def validar_token_restablecer_contrasena(token):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        usuario_id = payload['usuario_id']
+        return usuario_id
+    except InvalidTokenError:
+        return None
+```
+
+Asegúrate de instalar la biblioteca `PyJWT` si aún no lo has hecho:
+```bash
+pip install pyjwt
+```

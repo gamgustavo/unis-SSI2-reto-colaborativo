@@ -1,0 +1,27 @@
+```python
+import os
+import tempfile
+import uuid
+
+def save_report_to_temp(report_data):
+    try:
+        # Generar un nombre de archivo único para evitar colisiones
+        unique_filename = f"report_{uuid.uuid4()}.txt"
+        
+        # Crear un archivo temporal con eliminación segura al cerrar
+        with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=".txt") as temp_file:
+            temp_file.write(report_data)
+            temp_file_path = temp_file.name
+        
+        # Asegurarse de que el archivo tiene permisos de lectura y escritura solo para el propietario
+        os.chmod(temp_file_path, 0o600)
+        
+        return temp_file_path
+    
+    except Exception as e:
+        # Manejar cualquier excepción y asegurar que no se devuelva información sensible
+        print(f"Error al guardar el reporte: {e}")
+        return None
+```
+
+Este código crea un archivo temporal seguro para guardar datos de un reporte. Utiliza `tempfile.NamedTemporaryFile` para crear un archivo temporal con un nombre único y asegura que el archivo tenga los permisos adecuados para evitar accesos no autorizados. Además, maneja excepciones para asegurar que no se filtre información sensible en caso de error.

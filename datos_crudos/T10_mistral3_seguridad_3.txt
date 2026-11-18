@@ -1,0 +1,146 @@
+```python
+import re
+import requests
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, Response
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import BadRequest, Forbidden, InternalServerError
+
+app = Flask(__name__)
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800,
+)
+
+# Limitador de peticiones para prevenir abusos
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+# Lista de dominios permitidos (ajusta según tus necesidades)
+ALLOWED_DOMAINS = {
+    'example.com',
+    'wikipedia.org',
+    'github.com',
+    'python.org'
+}
+
+# Lista de User-Agents permitidos (para evitar solicitudes sospechosas)
+ALLOWED_USER_AGENTS = {
+    'Mozilla/5.0',
+    'curl/',
+    'Wget/',
+    'python-requests/'
+}
+
+# Validación de URL
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        if not all([result.scheme, result.netloc]):
+            return False
+        if result.scheme not in ['http', 'https']:
+            return False
+        if not re.match(r'^[\w\.-]+(\.[\w\.-]+)+$', result.netloc):
+            return False
+        return True
+    except:
+        return False
+
+# Validación de dominio permitido
+def is_allowed_domain(url):
+    domain = urlparse(url).netloc.lower()
+    return any(domain.endswith(allowed) for allowed in ALLOWED_DOMAINS)
+
+# Validación de User-Agent
+def is_allowed_user_agent(user_agent):
+    if not user_agent:
+        return False
+    return any(ua in user_agent for ua in ALLOWED_USER_AGENTS)
+
+@app.route('/fetch', methods=['GET'])
+@limiter.limit("10 per minute")
+def fetch_url():
+    # Validar User-Agent
+    user_agent = request.headers.get('User-Agent', '')
+    if not is_allowed_user_agent(user_agent):
+        raise Forbidden("User-Agent no permitido")
+
+    # Obtener y validar URL
+    url = request.args.get('url')
+    if not url:
+        raise BadRequest("Parámetro 'url' es requerido")
+
+    if not is_valid_url(url):
+        raise BadRequest("URL no válida")
+
+    if not is_allowed_domain(url):
+        raise Forbidden("Dominio no permitido")
+
+    # Configuración segura para la solicitud
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; ProxyFetch/1.0)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+
+    try:
+        # Configurar timeout y deshabilitar redirecciones automáticas
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10,
+            allow_redirects=False,
+            stream=True
+        )
+
+        # Verificar código de estado
+        if response.status_code != 200:
+            raise InternalServerError(f"Error al obtener la página: {response.status_code}")
+
+        # Verificar tipo de contenido
+        content_type = response.headers.get('Content-Type', '')
+        if 'text/html' not in content_type and 'text/plain' not in content_type:
+            raise Forbidden("Tipo de contenido no permitido")
+
+        # Configurar respuesta segura
+        resp = Response(
+            response.iter_content(chunk_size=8192),
+            content_type=content_type,
+            status=response.status_code
+        )
+
+        # Configurar headers de seguridad
+        resp.headers['X-Content-Type-Options'] = 'nosniff'
+        resp.headers['X-Frame-Options'] = 'DENY'
+        resp.headers['Content-Security-Policy'] = "default-src 'none'"
+        resp.headers['Referrer-Policy'] = 'no-referrer'
+        resp.headers['Cache-Control'] = 'no-store'
+
+        return resp
+
+    except requests.exceptions.RequestException as e:
+        raise InternalServerError(f"Error al procesar la solicitud: {str(e)}")
+    except Exception as e:
+        raise InternalServerError(f"Error inesperado: {str(e)}")
+
+# Manejo de errores
+@app.errorhandler(BadRequest)
+@app.errorhandler(Forbidden)
+@app.errorhandler(InternalServerError)
+def handle_error(e):
+    return jsonify({
+        'error': str(e),
+        'status': e.code
+    }), e.code
+
+if __name__ == '__main__':
+    app.run(ssl_context='adhoc', host='0.0.0.0', port=5000)
+```

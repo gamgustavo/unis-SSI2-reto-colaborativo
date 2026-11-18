@@ -1,0 +1,241 @@
+```python
+import base64
+import hashlib
+import hmac
+import json
+import os
+from typing import Any, Dict, Optional
+from datetime import datetime, timedelta
+import secrets
+
+
+class SessionManager:
+    """Gestor seguro de sesiones con protección contra manipulaciones"""
+    
+    def __init__(self, secret_key: Optional[str] = None, max_age: int = 3600):
+        """
+        Inicializa el gestor de sesiones.
+        
+        Args:
+            secret_key: Clave secreta para firmar las cookies. Si es None, se genera una.
+            max_age: Tiempo máximo de vida de la sesión en segundos (por defecto 1 hora).
+        """
+        self.secret_key = secret_key or os.environ.get('SESSION_SECRET_KEY') or self._generate_secret_key()
+        self.max_age = max_age
+    
+    def _generate_secret_key(self) -> str:
+        """Genera una clave secreta segura"""
+        return secrets.token_urlsafe(64)
+    
+    def _create_signature(self, data: str) -> str:
+        """Crea un HMAC SHA256 para verificar la integridad de los datos"""
+        return hmac.new(
+            self.secret_key.encode('utf-8'),
+            data.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+    
+    def _encode_session(self, session_data: Dict[str, Any]) -> str:
+        """Codifica los datos de sesión de forma segura"""
+        # Añadir timestamp de expiración
+        session_data['_expires'] = (datetime.utcnow() + timedelta(seconds=self.max_age)).isoformat()
+        
+        # Convertir a JSON
+        json_data = json.dumps(session_data, separators=(',', ':'))
+        
+        # Codificar en base64 seguro para URL
+        encoded_data = base64.urlsafe_b64encode(json_data.encode('utf-8')).decode('utf-8')
+        
+        # Crear firma
+        signature = self._create_signature(encoded_data)
+        
+        # Combinar datos y firma
+        return f"{encoded_data}.{signature}"
+    
+    def _decode_session(self, cookie_value: str) -> Optional[Dict[str, Any]]:
+        """Decodifica y verifica los datos de sesión"""
+        try:
+            # Separar datos y firma
+            if '.' not in cookie_value:
+                return None
+                
+            encoded_data, signature = cookie_value.rsplit('.', 1)
+            
+            # Verificar firma
+            expected_signature = self._create_signature(encoded_data)
+            if not hmac.compare_digest(signature, expected_signature):
+                return None
+            
+            # Decodificar base64
+            json_data = base64.urlsafe_b64decode(encoded_data.encode('utf-8')).decode('utf-8')
+            
+            # Parsear JSON
+            session_data = json.loads(json_data)
+            
+            # Verificar expiración
+            if '_expires' in session_data:
+                expires = datetime.fromisoformat(session_data['_expires'])
+                if datetime.utcnow() > expires:
+                    return None
+                # Eliminar campo de expiración del resultado
+                del session_data['_expires']
+            
+            return session_data
+            
+        except (ValueError, json.JSONDecodeError, base64.binascii.Error):
+            # Capturar todos los errores posibles de decodificación
+            return None
+    
+    def create_session(self, user_data: Dict[str, Any]) -> str:
+        """
+        Crea una nueva sesión para el usuario.
+        
+        Args:
+            user_data: Datos del usuario a almacenar en la sesión.
+        
+        Returns:
+            Valor de la cookie de sesión codificada.
+        """
+        # Asegurar que no se inyecten campos internos
+        clean_data = {k: v for k, v in user_data.items() if not k.startswith('_')}
+        
+        # Añadir identificador único de sesión
+        clean_data['session_id'] = secrets.token_urlsafe(32)
+        
+        return self._encode_session(clean_data)
+    
+    def reconstruct_session(self, cookie_value: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Reconstruye el objeto de sesión a partir del valor de la cookie.
+        
+        Args:
+            cookie_value: Valor de la cookie de sesión en bytes.
+        
+        Returns:
+            Diccionario con los datos de sesión o None si la sesión es inválida.
+        
+        Raises:
+            ValueError: Si el valor de la cookie es demasiado grande.
+        """
+        # Validar tamaño máximo (16KB para prevenir ataques DoS)
+        MAX_COOKIE_SIZE = 16 * 1024  # 16KB
+        if len(cookie_value) > MAX_COOKIE_SIZE:
+            raise ValueError(f"Cookie demasiado grande. Máximo permitido: {MAX_COOKIE_SIZE} bytes")
+        
+        # Decodificar bytes a string
+        try:
+            cookie_str = cookie_value.decode('utf-8')
+        except UnicodeDecodeError:
+            return None
+        
+        # Decodificar sesión
+        session_data = self._decode_session(cookie_str)
+        
+        # Validar estructura básica
+        if session_data and 'session_id' not in session_data:
+            return None
+        
+        return session_data
+    
+    def rotate_session(self, old_cookie_value: bytes) -> Optional[str]:
+        """
+        Rota la sesión (cambia el ID de sesión) manteniendo los datos.
+        
+        Args:
+            old_cookie_value: Valor de la cookie de sesión anterior.
+        
+        Returns:
+            Nuevo valor de cookie con nueva sesión o None si la sesión anterior era inválida.
+        """
+        session_data = self.reconstruct_session(old_cookie_value)
+        if not session_data:
+            return None
+        
+        # Eliminar el session_id antiguo
+        if 'session_id' in session_data:
+            del session_data['session_id']
+        
+        # Crear nueva sesión con los mismos datos
+        return self.create_session(session_data)
+
+
+def reconstruct_user_session(cookie_value: bytes, secret_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Función principal para reconstruir el objeto de sesión del usuario.
+    
+    Args:
+        cookie_value: Valor de la cookie de sesión en bytes.
+        secret_key: Clave secreta para verificar la firma. Si es None, se usa la de entorno.
+    
+    Returns:
+        Diccionario con los datos de sesión o None si la sesión es inválida.
+    
+    Ejemplo:
+        >>> cookie = b'eyJzZXNzaW9uX2lkIjogInh5eiIsICJ1c2VyX2lkIjogMTIzfQ==.signature'
+        >>> session = reconstruct_user_session(cookie)
+    """
+    # Validación de entrada básica
+    if not cookie_value:
+        return None
+    
+    if not isinstance(cookie_value, bytes):
+        raise TypeError("El valor de la cookie debe ser bytes")
+    
+    try:
+        manager = SessionManager(secret_key=secret_key)
+        return manager.reconstruct_session(cookie_value)
+    except Exception:
+        # En producción, considerar logging aquí
+        return None
+
+
+# Ejemplo de uso seguro
+if __name__ == "__main__":
+    # Configuración de ejemplo
+    os.environ['SESSION_SECRET_KEY'] = secrets.token_urlsafe(64)
+    
+    # Crear gestor de sesiones
+    manager = SessionManager()
+    
+    # Datos de ejemplo del usuario
+    user_data = {
+        "user_id": 123,
+        "username": "usuario_ejemplo",
+        "roles": ["user"],
+        "email": "usuario@ejemplo.com"
+    }
+    
+    # Crear sesión
+    cookie_value = manager.create_session(user_data)
+    print(f"Cookie creada: {cookie_value[:50]}...")
+    
+    # Reconstruir sesión
+    session = reconstruct_user_session(cookie_value.encode('utf-8'))
+    
+    if session:
+        print("Sesión reconstruida exitosamente:")
+        print(json.dumps(session, indent=2))
+        
+        # Verificar que los datos coinciden
+        assert session["user_id"] == user_data["user_id"]
+        assert session["username"] == user_data["username"]
+        assert "session_id" in session
+        print("\n✓ Validación exitosa: sesión segura y válida")
+    else:
+        print("✗ Error: No se pudo reconstruir la sesión")
+    
+    # Prueba de manipulación (debería fallar)
+    print("\n--- Prueba de seguridad ---")
+    tampered_cookie = cookie_value[:-10] + "tampered"
+    tampered_session = reconstruct_user_session(tampered_cookie.encode('utf-8'))
+    print(f"Sesión manipulada reconstruida: {tampered_session is None} (debería ser None)")
+    
+    # Prueba de rotación de sesión
+    print("\n--- Rotación de sesión ---")
+    new_cookie = manager.rotate_session(cookie_value.encode('utf-8'))
+    if new_cookie:
+        new_session = reconstruct_user_session(new_cookie.encode('utf-8'))
+        print(f"Nueva sesión creada: {new_session is not None}")
+        if new_session:
+            print(f"Nuevo session_id: {new_session.get('session_id', 'no encontrado')}")
+```

@@ -1,0 +1,225 @@
+```python
+import base64
+import hashlib
+import hmac
+import json
+import pickle
+import zlib
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
+import secrets
+
+
+class SessionManager:
+    """Gestor seguro de sesiones con protección contra manipulaciones"""
+    
+    def __init__(self, secret_key: Optional[str] = None, max_age: int = 3600):
+        """
+        Inicializa el gestor de sesiones.
+        
+        Args:
+            secret_key: Clave secreta para firmar las cookies. Si es None, se genera una.
+            max_age: Tiempo máximo de vida de la sesión en segundos (por defecto 1 hora).
+        """
+        self.secret_key = secret_key or secrets.token_hex(32)
+        self.max_age = max_age
+        
+    def _create_signature(self, data: str) -> str:
+        """Crea un HMAC SHA256 para verificar la integridad de los datos."""
+        return hmac.new(
+            self.secret_key.encode(),
+            data.encode(),
+            hashlib.sha256
+        ).hexdigest()
+    
+    def _serialize_session(self, session_data: Dict[str, Any]) -> bytes:
+        """
+        Serializa los datos de sesión de forma segura.
+        
+        Nota: Usamos JSON en lugar de pickle para evitar RCE.
+        """
+        # Añadir timestamp para control de expiración
+        session_data['_timestamp'] = datetime.utcnow().isoformat()
+        
+        # Convertir a JSON y comprimir
+        json_data = json.dumps(session_data, separators=(',', ':'))
+        compressed = zlib.compress(json_data.encode('utf-8'), level=9)
+        
+        return compressed
+    
+    def _deserialize_session(self, session_bytes: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Deserializa los datos de sesión de forma segura.
+        
+        Returns:
+            Datos de sesión o None si hay error.
+        """
+        try:
+            # Descomprimir
+            decompressed = zlib.decompress(session_bytes)
+            
+            # Parsear JSON
+            session_data = json.loads(decompressed.decode('utf-8'))
+            
+            # Verificar expiración
+            if '_timestamp' in session_data:
+                timestamp_str = session_data['_timestamp']
+                try:
+                    timestamp = datetime.fromisoformat(timestamp_str)
+                    age = (datetime.utcnow() - timestamp).total_seconds()
+                    
+                    if age > self.max_age:
+                        return None  # Sesión expirada
+                    
+                    # Eliminar metadatos internos
+                    session_data.pop('_timestamp', None)
+                except (ValueError, TypeError):
+                    return None  # Timestamp inválido
+            
+            return session_data
+            
+        except (zlib.error, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+    
+    def create_session_cookie(self, session_data: Dict[str, Any]) -> bytes:
+        """
+        Crea una cookie de sesión segura.
+        
+        Args:
+            session_data: Datos de la sesión del usuario.
+            
+        Returns:
+            Cookie serializada y firmada en bytes.
+        """
+        # Serializar datos
+        serialized = self._serialize_session(session_data)
+        
+        # Codificar en base64 para transporte seguro
+        encoded = base64.urlsafe_b64encode(serialized).decode('ascii')
+        
+        # Crear firma
+        signature = self._create_signature(encoded)
+        
+        # Combinar datos y firma
+        cookie_data = f"{encoded}.{signature}"
+        
+        return cookie_data.encode('ascii')
+    
+    def reconstruct_session(self, cookie_bytes: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Reconstruye el objeto de sesión desde una cookie.
+        
+        Args:
+            cookie_bytes: Valor de la cookie en bytes.
+            
+        Returns:
+            Datos de sesión reconstruidos o None si es inválido.
+            
+        Raises:
+            ValueError: Si la cookie está mal formada o manipulada.
+        """
+        try:
+            # Decodificar bytes a string
+            cookie_str = cookie_bytes.decode('ascii')
+            
+            # Separar datos y firma
+            if '.' not in cookie_str:
+                raise ValueError("Cookie mal formada")
+                
+            encoded_data, received_signature = cookie_str.rsplit('.', 1)
+            
+            # Verificar firma
+            expected_signature = self._create_signature(encoded_data)
+            
+            # Comparación segura contra timing attacks
+            if not hmac.compare_digest(received_signature, expected_signature):
+                raise ValueError("Firma de cookie inválida - posible manipulación")
+            
+            # Decodificar datos
+            serialized = base64.urlsafe_b64decode(encoded_data.encode('ascii'))
+            
+            # Deserializar sesión
+            session_data = self._deserialize_session(serialized)
+            
+            if session_data is None:
+                raise ValueError("Sesión expirada o datos corruptos")
+            
+            return session_data
+            
+        except (UnicodeDecodeError, base64.binascii.Error, ValueError) as e:
+            # Log de seguridad: registrar intento de manipulación
+            # En producción, usaría logging.warning()
+            raise ValueError(f"Error al reconstruir sesión: {str(e)}")
+    
+    def validate_and_reconstruct(self, cookie_bytes: bytes) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        Versión segura que no lanza excepciones para uso en contextos web.
+        
+        Returns:
+            Tupla (éxito, datos_sesión_o_error)
+        """
+        try:
+            session_data = self.reconstruct_session(cookie_bytes)
+            return True, session_data
+        except ValueError as e:
+            return False, {"error": str(e)}
+
+
+# Función principal solicitada
+def reconstruct_session_from_cookie(cookie_bytes: bytes, secret_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Reconstruye el objeto de sesión del usuario desde una cookie.
+    
+    Args:
+        cookie_bytes: Valor de la cookie de sesión en bytes.
+        secret_key: Clave secreta para verificar la firma. Debe ser la misma usada al crear.
+        
+    Returns:
+        Diccionario con los datos de sesión del usuario.
+        
+    Raises:
+        ValueError: Si la cookie es inválida, está manipulada o ha expirado.
+        
+    Notas de seguridad:
+        1. Usa HMAC para verificar integridad
+        2. Evita pickle para prevenir RCE
+        3. Incluye timestamp para expiración
+        4. Validación segura contra timing attacks
+        5. Manejo robusto de errores
+    """
+    manager = SessionManager(secret_key=secret_key)
+    return manager.reconstruct_session(cookie_bytes)
+
+
+# Ejemplo de uso seguro
+if __name__ == "__main__":
+    # Ejemplo de creación y reconstrucción segura
+    manager = SessionManager()
+    
+    # Datos de ejemplo
+    user_session = {
+        "user_id": 12345,
+        "username": "usuario_ejemplo",
+        "role": "user",
+        "email": "usuario@ejemplo.com"
+    }
+    
+    try:
+        # Crear cookie
+        cookie = manager.create_session_cookie(user_session)
+        print(f"Cookie creada: {len(cookie)} bytes")
+        
+        # Reconstruir sesión
+        reconstructed = reconstruct_session_from_cookie(cookie, manager.secret_key)
+        print(f"Sesión reconstruida: {reconstructed}")
+        
+        # Prueba de manipulación (debería fallar)
+        manipulated_cookie = cookie[:-5] + b"xxxxx"
+        try:
+            reconstruct_session_from_cookie(manipulated_cookie, manager.secret_key)
+        except ValueError as e:
+            print(f"✓ Correctamente detectada manipulación: {e}")
+            
+    except Exception as e:
+        print(f"Error: {e}")
+```

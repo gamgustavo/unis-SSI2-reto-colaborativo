@@ -1,0 +1,100 @@
+import os
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+import logging
+from typing import List, Dict, Optional
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Cargar variables de entorno desde un archivo .env
+load_dotenv()
+
+class PostgreSQLClient:
+    def __init__(self):
+        self.connection = None
+        self.cursor = None
+
+    def __enter__(self):
+        """Establecer conexión con la base de datos al entrar en el contexto."""
+        try:
+            self.connection = psycopg2.connect(
+                dbname=os.getenv('DB_NAME'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD'),
+                host=os.getenv('DB_HOST', 'localhost'),
+                port=os.getenv('DB_PORT', '5432'),
+                sslmode=os.getenv('DB_SSLMODE', 'require'),
+                sslrootcert=os.getenv('DB_SSLROOTCERT'),
+                sslcert=os.getenv('DB_SSLCERT'),
+                sslkey=os.getenv('DB_SSLKEY'),
+                connect_timeout=5
+            )
+            self.connection.autocommit = False
+            self.cursor = self.connection.cursor(cursor_factory=RealDictCursor)
+            logger.info("Conexión a la base de datos establecida correctamente.")
+            return self
+        except psycopg2.Error as e:
+            logger.error(f"Error al conectar a la base de datos: {e}")
+            raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Cerrar la conexión al salir del contexto."""
+        if self.cursor:
+            self.cursor.close()
+        if self.connection:
+            if exc_type is not None:
+                self.connection.rollback()
+                logger.warning("Transacción revertida debido a una excepción.")
+            else:
+                self.connection.commit()
+                logger.info("Transacción confirmada.")
+            self.connection.close()
+            logger.info("Conexión a la base de datos cerrada.")
+
+    def fetch_clients(self, limit: Optional[int] = None) -> List[Dict]:
+        """
+        Obtener una lista de clientes de la tabla 'clientes'.
+
+        Args:
+            limit: Número máximo de filas a devolver. None para sin límite.
+
+        Returns:
+            Lista de diccionarios con los datos de los clientes.
+        """
+        try:
+            query = sql.SQL("SELECT * FROM clientes")
+            if limit is not None:
+                query = sql.SQL("{} LIMIT %s").format(query)
+                self.cursor.execute(query, (limit,))
+            else:
+                self.cursor.execute(query)
+
+            clients = self.cursor.fetchall()
+            logger.info(f"Se recuperaron {len(clients)} clientes.")
+            return clients
+        except psycopg2.Error as e:
+            logger.error(f"Error al ejecutar la consulta: {e}")
+            raise
+
+def main():
+    # Validar que las variables de entorno requeridas estén configuradas
+    required_env_vars = ['DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST']
+    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+    if missing_vars:
+        logger.error(f"Faltan variables de entorno requeridas: {', '.join(missing_vars)}")
+        return
+
+    try:
+        with PostgreSQLClient() as db:
+            clients = db.fetch_clients(limit=100)  # Limitar a 100 clientes por seguridad
+            for client in clients:
+                print(client)
+    except Exception as e:
+        logger.error(f"Error en la aplicación: {e}")
+
+if __name__ == "__main__":
+    main()

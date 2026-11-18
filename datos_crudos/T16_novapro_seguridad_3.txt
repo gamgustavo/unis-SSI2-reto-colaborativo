@@ -1,0 +1,33 @@
+```python
+import jwt
+import datetime
+from typing import Optional
+
+SECRET_KEY = "your_secret_key_here"  # Cambia esto por una clave segura en producción
+ALGORITHM = "HS256"
+
+def generate_token(user_id: int, expires_delta: Optional[datetime.timedelta] = None) -> str:
+    to_encode = {"sub": str(user_id)}
+    if expires_delta:
+        expire = datetime.datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None or "exp" not in payload:
+            return None
+        return user_id
+    except jwt.PyJWTError:
+        return None
+```
+
+**Notas de seguridad:**
+1. **Clave Secreta:** Asegúrate de que `SECRET_KEY` sea una cadena larga y aleatoria. En un entorno de producción, deberías almacenarla de forma segura, por ejemplo, usando variables de entorno.
+2. **Expiración del Token:** Ajusta el tiempo de expiración (`expires_delta`) según tus necesidades de seguridad.
+3. **Validación del Token:** La función `verify_token` verifica la firma y la expiración del token. Asegúrate de manejar adecuadamente los casos en los que el token es inválido o ha expirado.

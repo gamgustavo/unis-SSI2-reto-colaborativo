@@ -1,0 +1,61 @@
+import os
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Tuple
+
+def guardar_reporte_temporal(datos: bytes, sufijo: str = ".tmp", prefijo: str = "reporte_") -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal seguro y devuelve la ruta del archivo.
+
+    Args:
+        datos: Datos binarios a guardar en el archivo temporal.
+        sufijo: Sufijo opcional para el nombre del archivo (ej: ".csv", ".json").
+        prefijo: Prefijo opcional para el nombre del archivo.
+
+    Returns:
+        Ruta absoluta del archivo temporal creado.
+
+    Raises:
+        ValueError: Si los datos están vacíos o el sufijo/prefijo contienen caracteres no permitidos.
+        IOError: Si ocurre un error al escribir el archivo.
+    """
+    # Validar datos de entrada
+    if not datos:
+        raise ValueError("Los datos no pueden estar vacíos")
+
+    # Validar sufijo y prefijo para evitar inyección de path o traversal
+    if not sufijo or not all(c.isalnum() or c in ('.', '_', '-') for c in sufijo):
+        raise ValueError("Sufijo inválido: solo se permiten caracteres alfanuméricos, '.', '_' y '-'")
+    if not prefijo or not all(c.isalnum() or c in ('_', '-') for c in prefijo):
+        raise ValueError("Prefijo inválido: solo se permiten caracteres alfanuméricos, '_' y '-'")
+
+    # Usar directorio temporal del sistema con permisos restringidos
+    temp_dir = Path(tempfile.gettempdir())
+    if not temp_dir.exists() or not os.access(temp_dir, os.W_OK):
+        raise IOError("No se puede escribir en el directorio temporal del sistema")
+
+    # Generar nombre de archivo seguro con UUID para evitar colisiones
+    nombre_archivo = f"{prefijo}{uuid.uuid4().hex}{sufijo}"
+    ruta_archivo = temp_dir / nombre_archivo
+
+    try:
+        # Escribir datos con permisos restringidos (solo lectura para el propietario)
+        with ruta_archivo.open('wb') as f:
+            os.chmod(ruta_archivo, 0o600)  # Permisos: rw-------
+            f.write(datos)
+
+        # Verificar que el archivo se creó correctamente
+        if not ruta_archivo.exists() or ruta_archivo.stat().st_size == 0:
+            raise IOError("Error al crear el archivo temporal")
+
+        return str(ruta_archivo.absolute())
+
+    except Exception as e:
+        # Limpiar en caso de error
+        if ruta_archivo.exists():
+            try:
+                ruta_archivo.unlink()
+            except:
+                pass
+        raise IOError(f"Error al guardar el reporte temporal: {str(e)}") from e

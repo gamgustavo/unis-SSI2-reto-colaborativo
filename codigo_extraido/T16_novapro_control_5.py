@@ -1,0 +1,41 @@
+import jwt
+import datetime
+
+# Configuración de la clave secreta y el algoritmo
+SECRET_KEY = "clave_secreta"
+ALGORITHM = "HS256"
+
+def generar_token(user_id: int, username: str, expiration_minutes: int = 30) -> str:
+    """
+    Genera un token JWT para un usuario dado.
+
+    :param user_id: ID del usuario
+    :param username: Nombre de usuario
+    :param expiration_minutes: Tiempo de expiración en minutos
+    :return: Token JWT
+    """
+    expiration = datetime.datetime.utcnow() + datetime.timedelta(minutes=expiration_minutes)
+    payload = {
+        "user_id": user_id,
+        "username": username,
+        "exp": expiration
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+def verificar_token(token: str) -> dict:
+    """
+    Verifica y decodifica un token JWT.
+
+    :param token: Token JWT a verificar
+    :return: Payload del token si es válido, None si no es válido
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        print("El token ha expirado")
+        return None
+    except jwt.InvalidTokenError:
+        print("Token inválido")
+        return None

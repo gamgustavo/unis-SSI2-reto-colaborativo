@@ -1,0 +1,307 @@
+```python
+import os
+import sqlite3
+import hashlib
+import secrets
+import re
+from typing import Tuple, Optional
+from dataclasses import dataclass
+
+# Configuración de seguridad
+PEPPER = os.getenv('PASSWORD_PEPPER', secrets.token_hex(32))  # Debe ser una variable de entorno en producción
+MIN_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 64
+ITERATIONS = 600000  # Para PBKDF2
+HASH_ALGORITHM = 'sha256'
+SALT_LENGTH = 32
+HASH_LENGTH = 32
+
+# Validación de contraseña (OWASP recommendations)
+def validate_password(password: str) -> Tuple[bool, str]:
+    """Valida que la contraseña cumpla con los requisitos de seguridad."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return False, f"La contraseña debe tener al menos {MIN_PASSWORD_LENGTH} caracteres"
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return False, f"La contraseña no puede exceder {MAX_PASSWORD_LENGTH} caracteres"
+
+    # Verificar complejidad
+    if not re.search(r"[A-Z]", password):
+        return False, "La contraseña debe contener al menos una letra mayúscula"
+    if not re.search(r"[a-z]", password):
+        return False, "La contraseña debe contener al menos una letra minúscula"
+    if not re.search(r"[0-9]", password):
+        return False, "La contraseña debe contener al menos un número"
+    if not re.search(r"[^A-Za-z0-9]", password):
+        return False, "La contraseña debe contener al menos un carácter especial"
+
+    # Verificar contra contraseñas comunes (simplificado)
+    common_passwords = ['password', '12345678', 'qwerty', 'letmein']
+    if password.lower() in common_passwords:
+        return False, "La contraseña es demasiado común"
+
+    return True, "Contraseña válida"
+
+def hash_password(password: str) -> Tuple[str, str]:
+    """Genera un hash seguro de la contraseña usando PBKDF2 con salt y pepper."""
+    salt = secrets.token_hex(SALT_LENGTH)
+    peppered_password = (password + PEPPER).encode('utf-8')
+    salt_bytes = salt.encode('utf-8')
+
+    # Usar PBKDF2 para derivar la clave
+    hash_bytes = hashlib.pbkdf2_hmac(
+        HASH_ALGORITHM,
+        peppered_password,
+        salt_bytes,
+        ITERATIONS,
+        dklen=HASH_LENGTH
+    )
+
+    return salt, hash_bytes.hex()
+
+def verify_password(stored_hash: str, stored_salt: str, password_attempt: str) -> bool:
+    """Verifica si la contraseña proporcionada coincide con el hash almacenado."""
+    peppered_password = (password_attempt + PEPPER).encode('utf-8')
+    salt_bytes = stored_salt.encode('utf-8')
+
+    # Recalcular el hash con el mismo salt y parámetros
+    hash_bytes = hashlib.pbkdf2_hmac(
+        HASH_ALGORITHM,
+        peppered_password,
+        salt_bytes,
+        ITERATIONS,
+        dklen=HASH_LENGTH
+    )
+
+    return secrets.compare_digest(hash_bytes.hex(), stored_hash)
+
+@dataclass
+class User:
+    username: str
+    email: str
+    password_hash: str
+    salt: str
+    failed_attempts: int = 0
+    account_locked: bool = False
+    last_password_change: Optional[str] = None
+
+class UserDatabase:
+    def __init__(self, db_path: str = 'users.db'):
+        self.db_path = db_path
+        self._initialize_database()
+
+    def _initialize_database(self):
+        """Crea la base de datos y las tablas necesarias."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    failed_attempts INTEGER DEFAULT 0,
+                    account_locked BOOLEAN DEFAULT FALSE,
+                    last_password_change TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT email_unique UNIQUE (email)
+                )
+            """)
+            conn.commit()
+
+    def _get_user_by_username(self, username: str) -> Optional[User]:
+        """Obtiene un usuario por su nombre de usuario."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT username, email, password_hash, salt, failed_attempts, account_locked, last_password_change
+                FROM users
+                WHERE username = ?
+            """, (username,))
+            row = cursor.fetchone()
+
+            if row:
+                return User(*row)
+            return None
+
+    def _get_user_by_email(self, email: str) -> Optional[User]:
+        """Obtiene un usuario por su email."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT username, email, password_hash, salt, failed_attempts, account_locked, last_password_change
+                FROM users
+                WHERE email = ?
+            """, (email,))
+            row = cursor.fetchone()
+
+            if row:
+                return User(*row)
+            return None
+
+    def register_user(self, username: str, email: str, password: str) -> Tuple[bool, str]:
+        """Registra un nuevo usuario con validación de seguridad."""
+        # Validar entrada
+        if not username or not email or not password:
+            return False, "Todos los campos son obligatorios"
+
+        if not re.match(r"^[a-zA-Z0-9_]{4,32}$", username):
+            return False, "Nombre de usuario inválido"
+
+        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", email):
+            return False, "Email inválido"
+
+        # Validar contraseña
+        is_valid, message = validate_password(password)
+        if not is_valid:
+            return False, message
+
+        # Verificar si el usuario o email ya existen
+        if self._get_user_by_username(username):
+            return False, "El nombre de usuario ya está en uso"
+
+        if self._get_user_by_email(email):
+            return False, "El email ya está en uso"
+
+        # Hash de la contraseña
+        salt, password_hash = hash_password(password)
+
+        # Guardar en la base de datos
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO users (username, email, password_hash, salt)
+                    VALUES (?, ?, ?, ?)
+                """, (username, email, password_hash, salt))
+                conn.commit()
+            return True, "Usuario registrado con éxito"
+        except sqlite3.Error as e:
+            return False, f"Error al registrar usuario: {str(e)}"
+
+    def verify_user_password(self, username: str, password: str) -> Tuple[bool, str]:
+        """Verifica la contraseña de un usuario con protección contra ataques."""
+        user = self._get_user_by_username(username)
+        if not user:
+            # Simular tiempo de verificación para evitar enumeración de usuarios
+            hash_password("dummy_password_to_simulate_time")  # Simular tiempo de hash
+            return False, "Credenciales inválidas"
+
+        if user.account_locked:
+            return False, "Cuenta bloqueada por demasiados intentos fallidos"
+
+        # Verificar contraseña
+        if verify_password(user.password_hash, user.salt, password):
+            # Restablecer intentos fallidos si la contraseña es correcta
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE users
+                    SET failed_attempts = 0
+                    WHERE username = ?
+                """, (username,))
+                conn.commit()
+            return True, "Autenticación exitosa"
+        else:
+            # Incrementar intentos fallidos
+            new_attempts = user.failed_attempts + 1
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE users
+                    SET failed_attempts = ?
+                    WHERE username = ?
+                """, (new_attempts, username))
+
+                # Bloquear cuenta si hay demasiados intentos fallidos
+                if new_attempts >= 5:
+                    cursor.execute("""
+                        UPDATE users
+                        SET account_locked = TRUE
+                        WHERE username = ?
+                    """, (username,))
+                    conn.commit()
+                    return False, "Cuenta bloqueada por demasiados intentos fallidos"
+                conn.commit()
+
+            return False, "Credenciales inválidas"
+
+    def change_password(self, username: str, current_password: str, new_password: str) -> Tuple[bool, str]:
+        """Cambia la contraseña de un usuario con validación."""
+        # Verificar contraseña actual
+        success, message = self.verify_user_password(username, current_password)
+        if not success:
+            return False, message
+
+        # Validar nueva contraseña
+        is_valid, message = validate_password(new_password)
+        if not is_valid:
+            return False, message
+
+        # Verificar que la nueva contraseña no sea igual a la anterior
+        user = self._get_user_by_username(username)
+        if verify_password(user.password_hash, user.salt, new_password):
+            return False, "La nueva contraseña no puede ser igual a la anterior"
+
+        # Hash de la nueva contraseña
+        salt, password_hash = hash_password(new_password)
+
+        # Actualizar en la base de datos
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE users
+                    SET password_hash = ?, salt = ?, failed_attempts = 0, account_locked = FALSE,
+                        last_password_change = CURRENT_TIMESTAMP
+                    WHERE username = ?
+                """, (password_hash, salt, username))
+                conn.commit()
+            return True, "Contraseña cambiada con éxito"
+        except sqlite3.Error as e:
+            return False, f"Error al cambiar contraseña: {str(e)}"
+
+    def unlock_account(self, username: str) -> Tuple[bool, str]:
+        """Desbloquea una cuenta de usuario."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE users
+                    SET account_locked = FALSE, failed_attempts = 0
+                    WHERE username = ?
+                """, (username,))
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return False, "Usuario no encontrado"
+                return True, "Cuenta desbloqueada con éxito"
+        except sqlite3.Error as e:
+            return False, f"Error al desbloquear cuenta: {str(e)}"
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    # Configurar la base de datos (en producción, usa una ruta segura)
+    db = UserDatabase()
+
+    # Registrar un usuario
+    success, message = db.register_user(
+        username="usuario_seguro",
+        email="usuario@example.com",
+        password="ContraseñaSegura123!@#"
+    )
+    print(f"Registro: {message}")
+
+    # Verificar contraseña
+    success, message = db.verify_user_password(
+        username="usuario_seguro",
+        password="ContraseñaSegura123!@#"
+    )
+    print(f"Verificación: {message}")
+
+    # Intentar con contraseña incorrecta
+    success, message = db.verify_user_password(
+        username="usuario_seguro",
+        password="contraseña_incorrecta"
+    )
+    print(f"Verificación fallida: {message}")
+```

@@ -1,0 +1,92 @@
+```python
+import sqlite3
+import hashlib
+import secrets
+
+def crear_tabla_usuarios():
+    """Crea la tabla de usuarios si no existe"""
+    conn = sqlite3.connect('usuarios.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def registrar_usuario(username, password):
+    """
+    Registra un nuevo usuario con contraseña hasheada
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña en texto plano
+    
+    Returns:
+        bool: True si el registro fue exitoso, False si el usuario ya existe
+    """
+    # Verificar si el usuario ya existe
+    conn = sqlite3.connect('usuarios.db')
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT username FROM usuarios WHERE username = ?", (username,))
+    if cursor.fetchone():
+        conn.close()
+        return False
+    
+    # Generar salt y hash de la contraseña
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+    
+    # Insertar usuario en la base de datos
+    cursor.execute(
+        "INSERT INTO usuarios (username, salt, password_hash) VALUES (?, ?, ?)",
+        (username, salt, password_hash)
+    )
+    
+    conn.commit()
+    conn.close()
+    return True
+
+def verificar_password(username, password):
+    """
+    Verifica si la contraseña proporcionada es correcta para el usuario
+    
+    Args:
+        username: Nombre de usuario
+        password: Contraseña en texto plano a verificar
+    
+    Returns:
+        bool: True si la contraseña es correcta, False en caso contrario
+    """
+    conn = sqlite3.connect('usuarios.db')
+    cursor = conn.cursor()
+    
+    # Obtener salt y hash almacenados
+    cursor.execute(
+        "SELECT salt, password_hash FROM usuarios WHERE username = ?",
+        (username,)
+    )
+    
+    resultado = cursor.fetchone()
+    conn.close()
+    
+    if not resultado:
+        return False
+    
+    salt, password_hash_almacenado = resultado
+    
+    # Calcular hash de la contraseña proporcionada con el salt almacenado
+    password_hash_calculado = hashlib.sha256((password + salt).encode()).hexdigest()
+    
+    # Comparar hashes de manera segura
+    return secrets.compare_digest(password_hash_calculado, password_hash_almacenado)
+
+# Crear la tabla al importar el módulo
+crear_tabla_usuarios()
+```

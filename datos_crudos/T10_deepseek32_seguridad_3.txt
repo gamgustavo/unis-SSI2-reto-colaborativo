@@ -1,0 +1,241 @@
+```python
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+import logging
+from typing import Optional, Tuple
+
+app = Flask(__name__)
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Lista de dominios/redes privadas prohibidas (para evitar SSRF)
+PRIVATE_NETWORKS = [
+    '127.0.0.0/8',
+    '10.0.0.0/8',
+    '172.16.0.0/12',
+    '192.168.0.0/16',
+    '::1/128',
+    'fc00::/7',
+    'fe80::/10'
+]
+
+# Headers por defecto para las peticiones
+DEFAULT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate',
+    'Connection': 'close'  # Evitar conexiones persistentes
+}
+
+def is_valid_url(url: str) -> bool:
+    """Valida que la URL tenga un formato correcto y seguro."""
+    try:
+        result = urlparse(url)
+        
+        # Verificar esquema permitido (solo HTTP/HTTPS)
+        if result.scheme not in ('http', 'https'):
+            return False
+            
+        # Verificar que tenga netloc (dominio)
+        if not result.netloc:
+            return False
+            
+        # Validar caracteres peligrosos
+        if re.search(r'[\x00-\x1f\x7f]', url):
+            return False
+            
+        return True
+    except Exception:
+        return False
+
+def is_private_ip(ip: str) -> bool:
+    """Verifica si una IP pertenece a una red privada."""
+    try:
+        from ipaddress import ip_address, ip_network
+        
+        ip_obj = ip_address(ip)
+        
+        for network in PRIVATE_NETWORKS:
+            if ip_obj in ip_network(network):
+                return True
+                
+        return False
+    except ValueError:
+        return True  # Si no es una IP válida, tratamos como privada por seguridad
+
+def resolve_and_validate_domain(domain: str) -> Tuple[bool, Optional[str]]:
+    """Resuelve el dominio y valida que no sea una IP privada."""
+    try:
+        import socket
+        
+        # Resolver el dominio
+        ip = socket.gethostbyname(domain)
+        
+        # Verificar si es una IP privada
+        if is_private_ip(ip):
+            return False, ip
+            
+        return True, ip
+    except socket.gaierror:
+        return False, None
+    except Exception:
+        return False, None
+
+def sanitize_content(content: str) -> str:
+    """Sanitiza el contenido para evitar XSS en la respuesta JSON."""
+    # Escapar caracteres especiales para JSON
+    import json
+    return json.dumps(content)[1:-1]  # Remover las comillas agregadas por json.dumps
+
+@app.route('/fetch', methods=['GET'])
+def fetch_url():
+    """Endpoint para obtener el contenido de una URL."""
+    # Obtener la URL del parámetro de consulta
+    url = request.args.get('url')
+    
+    # Validar que se proporcionó una URL
+    if not url:
+        logger.warning("Solicitud sin parámetro 'url'")
+        return jsonify({
+            'error': 'Se requiere el parámetro "url"',
+            'status': 'error'
+        }), 400
+    
+    # Validar formato de URL
+    if not is_valid_url(url):
+        logger.warning(f"URL con formato inválido: {url}")
+        return jsonify({
+            'error': 'URL con formato inválido. Solo se permiten URLs HTTP/HTTPS.',
+            'status': 'error'
+        }), 400
+    
+    # Parsear la URL para obtener el dominio
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    
+    # Validar que el dominio no sea de una red privada (protección SSRF)
+    is_valid_domain, resolved_ip = resolve_and_validate_domain(domain)
+    
+    if not is_valid_domain:
+        logger.warning(f"Intento de acceso a red privada: {domain} -> {resolved_ip}")
+        return jsonify({
+            'error': 'Acceso a recursos internos no permitido',
+            'status': 'error'
+        }), 403
+    
+    # Configurar timeout para evitar DoS
+    timeout = 10  # segundos
+    
+    try:
+        logger.info(f"Descargando contenido de: {url}")
+        
+        # Realizar la petición con configuración segura
+        response = requests.get(
+            url,
+            headers=DEFAULT_HEADERS,
+            timeout=timeout,
+            verify=True,  # Verificar certificados SSL
+            allow_redirects=False  # No seguir redirecciones automáticamente
+        )
+        
+        # Verificar código de estado
+        if response.status_code != 200:
+            logger.warning(f"Respuesta no exitosa: {response.status_code} para {url}")
+            return jsonify({
+                'error': f'Error al descargar la página. Código: {response.status_code}',
+                'status_code': response.status_code,
+                'status': 'error'
+            }), 400
+        
+        # Obtener el tipo de contenido
+        content_type = response.headers.get('Content-Type', '')
+        
+        # Limitar el tamaño de la respuesta (1MB)
+        max_size = 1024 * 1024  # 1MB
+        if len(response.content) > max_size:
+            logger.warning(f"Contenido demasiado grande: {len(response.content)} bytes")
+            return jsonify({
+                'error': 'El contenido excede el tamaño máximo permitido (1MB)',
+                'status': 'error'
+            }), 413
+        
+        # Sanitizar el contenido si es texto
+        if 'text' in content_type:
+            content = sanitize_content(response.text)
+        else:
+            # Para contenido binario, devolver en base64
+            import base64
+            content = base64.b64encode(response.content).decode('utf-8')
+        
+        logger.info(f"Descarga exitosa de: {url}")
+        
+        return jsonify({
+            'url': url,
+            'content': content,
+            'content_type': content_type,
+            'status_code': response.status_code,
+            'status': 'success'
+        })
+        
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout al descargar: {url}")
+        return jsonify({
+            'error': 'Timeout al conectar con el servidor remoto',
+            'status': 'error'
+        }), 504
+        
+    except requests.exceptions.SSLError:
+        logger.error(f"Error SSL al descargar: {url}")
+        return jsonify({
+            'error': 'Error de certificado SSL',
+            'status': 'error'
+        }), 400
+        
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Error de conexión al descargar: {url}")
+        return jsonify({
+            'error': 'No se pudo conectar con el servidor remoto',
+            'status': 'error'
+        }), 400
+        
+    except requests.exceptions.TooManyRedirects:
+        logger.error(f"Demasiadas redirecciones: {url}")
+        return jsonify({
+            'error': 'Demasiadas redirecciones',
+            'status': 'error'
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"Error inesperado al descargar {url}: {str(e)}")
+        return jsonify({
+            'error': 'Error interno del servidor',
+            'status': 'error'
+        }), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        'error': 'Endpoint no encontrado',
+        'status': 'error'
+    }), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({
+        'error': 'Método no permitido',
+        'status': 'error'
+    }), 405
+
+if __name__ == '__main__':
+    # Configuración segura para producción
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        debug=False  # Siempre False en producción
+    )
+```

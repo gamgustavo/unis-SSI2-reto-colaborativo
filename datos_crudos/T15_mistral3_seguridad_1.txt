@@ -1,0 +1,68 @@
+```python
+import os
+import tempfile
+import uuid
+from pathlib import Path
+import json
+from typing import Dict, Any, Union
+
+def guardar_reporte_temporal(datos: Union[Dict[str, Any], str, bytes], sufijo: str = ".tmp") -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal seguro y devuelve la ruta del archivo.
+
+    Args:
+        datos: Datos a guardar. Puede ser un diccionario (se serializa a JSON),
+               una cadena o bytes (se guardan directamente).
+        sufijo: Sufijo para el archivo temporal (ej: ".json", ".txt", ".tmp").
+
+    Returns:
+        Ruta absoluta del archivo temporal creado.
+
+    Raises:
+        ValueError: Si los datos no son de un tipo soportado.
+        IOError: Si ocurre un error al escribir el archivo.
+    """
+    # Validar sufijo para evitar inyección de ruta
+    if not sufijo or not isinstance(sufijo, str) or not sufijo.startswith('.'):
+        sufijo = ".tmp"
+    sufijo = sufijo[:32]  # Limitar longitud para evitar ataques de DoS
+
+    # Crear directorio temporal seguro con permisos restringidos
+    temp_dir = tempfile.mkdtemp(prefix="reporte_", dir=tempfile.gettempdir())
+    try:
+        os.chmod(temp_dir, 0o700)  # Solo el propietario puede acceder
+
+        # Generar nombre de archivo seguro
+        nombre_archivo = f"reporte_{uuid.uuid4().hex}{sufijo}"
+        ruta_archivo = os.path.join(temp_dir, nombre_archivo)
+
+        # Validar que la ruta generada esté dentro del directorio temporal
+        if not Path(ruta_archivo).resolve().parent.samefile(Path(temp_dir).resolve()):
+            raise IOError("Intento de inyección de ruta detectado")
+
+        # Procesar y guardar los datos según su tipo
+        if isinstance(datos, dict):
+            with open(ruta_archivo, 'w', encoding='utf-8') as f:
+                json.dump(datos, f, ensure_ascii=False, indent=2)
+        elif isinstance(datos, str):
+            with open(ruta_archivo, 'w', encoding='utf-8') as f:
+                f.write(datos)
+        elif isinstance(datos, bytes):
+            with open(ruta_archivo, 'wb') as f:
+                f.write(datos)
+        else:
+            raise ValueError("Tipo de datos no soportado. Debe ser dict, str o bytes")
+
+        # Establecer permisos seguros para el archivo
+        os.chmod(ruta_archivo, 0o600)  # Solo lectura/escritura para el propietario
+
+        return os.path.abspath(ruta_archivo)
+
+    except Exception as e:
+        # Limpiar directorio temporal si ocurre un error
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+        raise IOError(f"Error al crear archivo temporal: {str(e)}")
+```

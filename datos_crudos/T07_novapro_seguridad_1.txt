@@ -1,0 +1,41 @@
+```python
+import pickle
+import hmac
+import hashlib
+from typing import Optional, Dict
+from flask import current_app
+
+def reconstruct_session(cookie_value: bytes, secret_key: str) -> Optional[Dict]:
+    if not isinstance(cookie_value, bytes) or not isinstance(secret_key, str):
+        return None
+
+    # Divide la cookie en datos y firma
+    try:
+        data, received_hmac = cookie_value.rsplit(b':', 1)
+    except ValueError:
+        return None
+
+    # Calcula la firma esperada
+    expected_hmac = hmac.new(secret_key.encode(), data, hashlib.sha256).hexdigest().encode()
+
+    # Verifica la firma
+    if not hmac.compare_digest(received_hmac.decode(), expected_hmac.decode()):
+        return None
+
+    # Deserializa los datos
+    try:
+        session_data = pickle.loads(data)
+        if not isinstance(session_data, dict):
+            return None
+    except (pickle.PickleError, EOFError):
+        return None
+
+    return session_data
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    cookie_value = b'serialized_session_data:calculated_hmac'
+    secret_key = current_app.config['SECRET_KEY']
+    session = reconstruct_session(cookie_value, secret_key)
+    print(session)
+```

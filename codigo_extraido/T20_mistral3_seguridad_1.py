@@ -1,0 +1,129 @@
+import os
+import zipfile
+import tempfile
+from pathlib import Path
+from werkzeug.utils import secure_filename
+
+def extraer_zip_seguro(archivo_zip, carpeta_destino='descargas'):
+    """
+    Extrae de forma segura el contenido de un archivo ZIP subido por el usuario.
+
+    Args:
+        archivo_zip: Objeto de archivo (FileStorage de Flask o similar) que representa el ZIP.
+        carpeta_destino: Carpeta donde se extraerán los archivos (relativa al directorio actual).
+
+    Returns:
+        tuple: (éxito: bool, mensaje: str, archivos_extraidos: list)
+
+    Seguridad:
+        - Valida el tipo MIME del archivo
+        - Usa nombres de archivo seguros
+        - Verifica rutas absolutas y traversal path
+        - Limita el tamaño de los archivos extraídos
+        - Usa un directorio temporal para validación previa
+        - Establece permisos restrictivos en los archivos extraídos
+    """
+    # Configuración de seguridad
+    MAX_TAMANO_ARCHIVO = 100 * 1024 * 1024  # 100MB
+    MAX_TAMANO_TOTAL = 500 * 1024 * 1024    # 500MB
+    TIPOS_MIME_PERMITIDOS = {'application/zip', 'application/x-zip-compressed'}
+    EXTENSIONES_PERMITIDAS = {'.zip'}
+
+    # Validaciones iniciales
+    if not archivo_zip:
+        return False, "No se proporcionó ningún archivo", []
+
+    # Verificar tipo MIME y extensión
+    if hasattr(archivo_zip, 'content_type'):
+        if archivo_zip.content_type not in TIPOS_MIME_PERMITIDOS:
+            return False, f"Tipo MIME no permitido: {archivo_zip.content_type}", []
+
+    filename = secure_filename(archivo_zip.filename)
+    if not any(filename.lower().endswith(ext) for ext in EXTENSIONES_PERMITIDAS):
+        return False, "Extensión de archivo no permitida", []
+
+    # Verificar tamaño del archivo
+    archivo_zip.seek(0, os.SEEK_END)
+    tamano_archivo = archivo_zip.tell()
+    archivo_zip.seek(0)
+
+    if tamano_archivo > MAX_TAMANO_ARCHIVO:
+        return False, f"El archivo excede el tamaño máximo permitido ({MAX_TAMANO_ARCHIVO/1024/1024}MB)", []
+
+    # Crear directorio de destino si no existe
+    Path(carpeta_destino).mkdir(parents=True, exist_ok=True)
+    ruta_destino = Path(carpeta_destino).resolve()
+
+    # Usar directorio temporal para validación
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        archivos_extraidos = []
+        tamano_total = 0
+
+        try:
+            # Guardar el ZIP temporalmente para procesarlo
+            temp_zip_path = temp_path / filename
+            archivo_zip.save(str(temp_zip_path))
+
+            # Verificar que es un ZIP válido
+            try:
+                with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                    # Verificar tamaño total antes de extraer
+                    for file_info in zip_ref.infolist():
+                        tamano_total += file_info.file_size
+                        if tamano_total > MAX_TAMANO_TOTAL:
+                            return False, f"El contenido total del ZIP excede el tamaño máximo permitido ({MAX_TAMANO_TOTAL/1024/1024}MB)", []
+
+                    # Extraer archivos uno por uno con validaciones
+                    for file_info in zip_ref.infolist():
+                        # Validar nombre de archivo
+                        nombre_archivo = secure_filename(file_info.filename)
+                        if not nombre_archivo:
+                            continue  # Saltar archivos con nombres no válidos
+
+                        # Prevenir traversal path
+                        ruta_archivo = (temp_path / nombre_archivo).resolve()
+                        if not str(ruta_archivo).startswith(str(temp_path)):
+                            return False, f"Intento de traversal path detectado en: {file_info.filename}", []
+
+                        # Extraer el archivo
+                        zip_ref.extract(file_info, temp_path)
+
+                        # Verificar que el archivo extraído está dentro del directorio temporal
+                        ruta_extraida = (temp_path / nombre_archivo).resolve()
+                        if not str(ruta_extraida).startswith(str(temp_path)):
+                            ruta_extraida.unlink(missing_ok=True)
+                            return False, f"Intento de traversal path detectado después de extracción: {nombre_archivo}", []
+
+                        # Mover a la carpeta de destino
+                        destino_final = (ruta_destino / nombre_archivo).resolve()
+                        if not str(destino_final).startswith(str(ruta_destino)):
+                            return False, f"Intento de traversal path en destino: {nombre_archivo}", []
+
+                        # Crear directorios necesarios
+                        destino_final.parent.mkdir(parents=True, exist_ok=True)
+
+                        # Mover el archivo
+                        if ruta_extraida.is_file():
+                            ruta_extraida.rename(destino_final)
+                        elif ruta_extraida.is_dir():
+                            # Para directorios, usamos copytree
+                            import shutil
+                            shutil.copytree(ruta_extraida, destino_final, dirs_exist_ok=True)
+                            shutil.rmtree(ruta_extraida)
+
+                        # Establecer permisos restrictivos
+                        if destino_final.is_file():
+                            destino_final.chmod(0o640)  # rw-r-----
+                        elif destino_final.is_dir():
+                            destino_final.chmod(0o750)  # rwxr-x---
+
+                        archivos_extraidos.append(str(destino_final.relative_to(ruta_destino)))
+
+            except zipfile.BadZipFile:
+                return False, "El archivo no es un ZIP válido", []
+
+        except Exception as e:
+            return False, f"Error al procesar el archivo ZIP: {str(e)}", []
+
+    return True, "Archivo ZIP extraído correctamente", archivos_extraidos

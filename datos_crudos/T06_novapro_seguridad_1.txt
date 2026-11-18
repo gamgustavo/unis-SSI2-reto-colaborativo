@@ -1,0 +1,40 @@
+```python
+import secrets
+import jwt
+import datetime
+from jwt.exceptions import InvalidTokenError
+
+# Configuración de la clave secreta y tiempo de expiración del token
+SECRET_KEY = secrets.token_hex(32)  # Genera una clave secreta segura
+TOKEN_EXPIRATION_MINUTES = 15  # Tiempo de expiración del token en minutos
+
+def generate_reset_token(user_id):
+    """
+    Genera un token JWT para restablecer la contraseña de un usuario.
+
+    :param user_id: ID del usuario
+    :return: Token JWT
+    """
+    payload = {
+        'user_id': user_id,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=TOKEN_EXPIRATION_MINUTES)
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+    return token
+
+def validate_reset_token(token):
+    """
+    Valida un token JWT para restablecer la contraseña.
+
+    :param token: Token JWT
+    :return: ID del usuario si el token es válido, None en caso contrario
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        user_id = payload['user_id']
+        return user_id
+    except InvalidTokenError:
+        return None
+```
+
+Este código genera y valida tokens JWT para restablecer contraseñas de manera segura. Utiliza una clave secreta generada de forma segura y establece un tiempo de expiración para los tokens. La validación del token verifica su integridad y expiración.

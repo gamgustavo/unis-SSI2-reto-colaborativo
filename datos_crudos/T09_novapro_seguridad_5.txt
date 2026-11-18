@@ -1,0 +1,47 @@
+```python
+from flask import Flask, request, jsonify
+import os
+from werkzeug.utils import secure_filename
+import magic
+
+app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads/'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def is_image(file_path):
+    mime = magic.Magic(mime=True)
+    return mime.from_file(file_path).startswith('image/')
+
+@app.route('/upload-profile-picture', methods=['POST'])
+def upload_profile_picture():
+    if 'file' not in request.files:
+        return jsonify(error="No file part"), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify(error="No selected file"), 400
+    
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        
+        if not is_image(file_path):
+            os.remove(file_path)
+            return jsonify(error="Invalid file type"), 400
+        
+        return jsonify(message="File successfully uploaded", filename=filename), 201
+    
+    return jsonify(error="Invalid file type"), 400
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```

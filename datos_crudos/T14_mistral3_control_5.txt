@@ -1,0 +1,51 @@
+```python
+import requests
+
+def consumir_api(url, token, params=None, headers=None):
+    """
+    Consume una API HTTPS con autenticación mediante token.
+
+    Args:
+        url (str): URL de la API.
+        token (str): Token de autenticación.
+        params (dict, optional): Parámetros de la consulta. Defaults to None.
+        headers (dict, optional): Headers adicionales. Defaults to None.
+
+    Returns:
+        dict: JSON de respuesta de la API.
+    """
+    # Configurar headers por defecto con el token
+    default_headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+
+    # Combinar headers por defecto con headers adicionales
+    if headers:
+        default_headers.update(headers)
+
+    try:
+        # Realizar la petición GET a la API
+        response = requests.get(
+            url,
+            headers=default_headers,
+            params=params,
+            verify=True  # Verifica el certificado SSL
+        )
+
+        # Verificar si la petición fue exitosa
+        response.raise_for_status()
+
+        # Devolver la respuesta en formato JSON
+        return response.json()
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error al consumir la API: {e}")
+        return None
+
+# Ejemplo de uso:
+# url = "https://api.ejemplo.com/recurso"
+# token = "tu_token_aqui"
+# resultado = consumir_api(url, token)
+# print(resultado)
+```

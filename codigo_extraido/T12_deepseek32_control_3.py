@@ -1,0 +1,56 @@
+import yaml
+import io
+
+def leer_yaml(archivo_subido):
+    """
+    Lee un archivo YAML subido por el usuario y devuelve el diccionario resultante.
+    
+    Args:
+        archivo_subido: Objeto de archivo subido (como el de Flask/Django o similar)
+        
+    Returns:
+        dict: Contenido del YAML parseado como diccionario
+        
+    Raises:
+        yaml.YAMLError: Si hay un error en el formato YAML
+        ValueError: Si el archivo está vacío o no es válido
+    """
+    try:
+        # Verificar que el archivo no esté vacío
+        contenido = archivo_subido.read()
+        if not contenido:
+            raise ValueError("El archivo está vacío")
+            
+        # Resetear el cursor del archivo para poder leerlo de nuevo
+        archivo_subido.seek(0)
+        
+        # Cargar el contenido YAML
+        datos = yaml.safe_load(archivo_subido)
+        
+        # Si el YAML está vacío o solo contiene comentarios, safe_load devuelve None
+        if datos is None:
+            return {}
+            
+        return datos
+        
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error al parsear YAML: {str(e)}")
+    except AttributeError:
+        raise ValueError("El objeto proporcionado no es un archivo válido")
+    except Exception as e:
+        raise ValueError(f"Error al procesar el archivo: {str(e)}")
+
+# Ejemplo de uso (comentado):
+# if __name__ == "__main__":
+#     # Simular un archivo subido
+#     yaml_content = """
+#     database:
+#       host: localhost
+#       port: 5432
+#     server:
+#       port: 8080
+#     """
+#     
+#     archivo_simulado = io.StringIO(yaml_content)
+#     resultado = leer_yaml(archivo_simulado)
+#     print(resultado)

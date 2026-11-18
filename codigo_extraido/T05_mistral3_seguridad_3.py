@@ -1,0 +1,375 @@
+import os
+import sqlite3
+import hashlib
+import secrets
+import re
+from typing import Tuple, Optional
+from functools import wraps
+from flask import Flask, request, jsonify, session
+import hmac
+
+# Configuración inicial
+app = Flask(__name__)
+app.secret_key = os.urandom(32)  # Clave secreta para sesiones
+DATABASE = 'users.db'
+PEPPER = os.getenv('PEPPER', secrets.token_hex(32))  # Valor secreto adicional para hashing
+
+# Configuración de seguridad
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800  # 30 minutos
+)
+
+# Inicialización de la base de datos
+def init_db():
+    with sqlite3.connect(DATABASE) as conn:
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            iterations INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP,
+            failed_attempts INTEGER DEFAULT 0,
+            account_locked BOOLEAN DEFAULT FALSE
+        )
+        ''')
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used BOOLEAN DEFAULT FALSE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        ''')
+        conn.commit()
+
+# Decorador para requerir autenticación
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Validación de contraseña
+def validate_password(password: str) -> Tuple[bool, str]:
+    if len(password) < 12:
+        return False, "Password must be at least 12 characters long"
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter"
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter"
+    if not re.search(r'[0-9]', password):
+        return False, "Password must contain at least one digit"
+    if not re.search(r'[^A-Za-z0-9]', password):
+        return False, "Password must contain at least one special character"
+    if re.search(r'(.)\1{2,}', password):
+        return False, "Password contains repeated characters"
+    common_passwords = ['password', '12345678', 'qwertyuiop', '11111111']
+    if password.lower() in common_passwords:
+        return False, "Password is too common"
+    return True, "Password is valid"
+
+# Generar hash seguro de contraseña
+def hash_password(password: str, salt: Optional[str] = None, iterations: int = 100000) -> Tuple[str, str, int]:
+    if salt is None:
+        salt = secrets.token_hex(16)
+    peppered_password = password + PEPPER
+    password_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        peppered_password.encode('utf-8'),
+        salt.encode('utf-8'),
+        iterations
+    )
+    return password_hash.hex(), salt, iterations
+
+# Verificar contraseña
+def verify_password(stored_hash: str, stored_salt: str, stored_iterations: int, provided_password: str) -> bool:
+    peppered_password = provided_password + PEPPER
+    new_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        peppered_password.encode('utf-8'),
+        stored_salt.encode('utf-8'),
+        stored_iterations
+    )
+    return hmac.compare_digest(new_hash.hex(), stored_hash)
+
+# Registrar nuevo usuario
+def register_user(username: str, password: str) -> Tuple[bool, str]:
+    # Validar entrada
+    if not username or not password:
+        return False, "Username and password are required"
+
+    if len(username) < 4 or len(username) > 32:
+        return False, "Username must be between 4 and 32 characters"
+
+    if not re.match(r'^[a-zA-Z0-9_]+$', username):
+        return False, "Username can only contain letters, numbers, and underscores"
+
+    # Validar contraseña
+    is_valid, message = validate_password(password)
+    if not is_valid:
+        return False, message
+
+    # Verificar si usuario ya existe
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
+        if cursor.fetchone():
+            return False, "Username already exists"
+
+        # Generar hash de contraseña
+        password_hash, salt, iterations = hash_password(password)
+
+        try:
+            cursor.execute('''
+            INSERT INTO users (username, password_hash, salt, iterations)
+            VALUES (?, ?, ?, ?)
+            ''', (username, password_hash, salt, iterations))
+            conn.commit()
+            return True, "User registered successfully"
+        except sqlite3.IntegrityError:
+            return False, "Username already exists"
+
+# Iniciar sesión
+def login_user(username: str, password: str) -> Tuple[bool, str]:
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+
+        # Obtener información del usuario
+        cursor.execute('''
+        SELECT id, password_hash, salt, iterations, failed_attempts, account_locked
+        FROM users WHERE username = ?
+        ''', (username,))
+        user = cursor.fetchone()
+
+        if not user:
+            # Usuario no existe (pero no lo revelamos por seguridad)
+            return False, "Invalid username or password"
+
+        user_id, stored_hash, stored_salt, stored_iterations, failed_attempts, account_locked = user
+
+        if account_locked:
+            return False, "Account is locked due to too many failed attempts"
+
+        # Verificar contraseña
+        if verify_password(stored_hash, stored_salt, stored_iterations, password):
+            # Restablecer intentos fallidos
+            cursor.execute('''
+            UPDATE users SET failed_attempts = 0, last_login = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ''', (user_id,))
+            conn.commit()
+
+            # Establecer sesión
+            session.clear()
+            session['user_id'] = user_id
+            session.permanent = True
+            return True, "Login successful"
+        else:
+            # Incrementar intentos fallidos
+            new_attempts = failed_attempts + 1
+            if new_attempts >= 5:
+                cursor.execute('''
+                UPDATE users SET failed_attempts = ?, account_locked = TRUE
+                WHERE id = ?
+                ''', (new_attempts, user_id))
+                conn.commit()
+                return False, "Account locked due to too many failed attempts"
+            else:
+                cursor.execute('''
+                UPDATE users SET failed_attempts = ?
+                WHERE id = ?
+                ''', (new_attempts, user_id))
+                conn.commit()
+                return False, "Invalid username or password"
+
+# Cambiar contraseña
+@login_required
+def change_password(current_password: str, new_password: str) -> Tuple[bool, str]:
+    user_id = session['user_id']
+
+    # Validar nueva contraseña
+    is_valid, message = validate_password(new_password)
+    if not is_valid:
+        return False, message
+
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+
+        # Verificar contraseña actual
+        cursor.execute('''
+        SELECT password_hash, salt, iterations FROM users WHERE id = ?
+        ''', (user_id,))
+        user = cursor.fetchone()
+
+        if not user:
+            return False, "User not found"
+
+        stored_hash, stored_salt, stored_iterations = user
+
+        if not verify_password(stored_hash, stored_salt, stored_iterations, current_password):
+            return False, "Current password is incorrect"
+
+        # Generar nuevo hash
+        new_hash, new_salt, new_iterations = hash_password(new_password)
+
+        # Actualizar contraseña
+        cursor.execute('''
+        UPDATE users SET password_hash = ?, salt = ?, iterations = ?
+        WHERE id = ?
+        ''', (new_hash, new_salt, new_iterations, user_id))
+        conn.commit()
+
+        # Invalidar otras sesiones (simplificado)
+        session.clear()
+        session['user_id'] = user_id
+        session.permanent = True
+
+        return True, "Password changed successfully"
+
+# Generar token de restablecimiento de contraseña
+def generate_password_reset_token(username: str) -> Tuple[bool, str]:
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+
+        # Obtener ID de usuario
+        cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
+        user = cursor.fetchone()
+
+        if not user:
+            return False, "User not found"
+
+        user_id = user[0]
+
+        # Generar token seguro
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+        expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+
+        # Guardar token en la base de datos
+        cursor.execute('''
+        INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+        VALUES (?, ?, ?)
+        ''', (user_id, token_hash, expires_at))
+        conn.commit()
+
+        # En un entorno real, enviarías el token por email
+        # Aquí solo lo devolvemos para demostración
+        return True, token
+
+# Restablecer contraseña con token
+def reset_password(token: str, new_password: str) -> Tuple[bool, str]:
+    # Validar nueva contraseña
+    is_valid, message = validate_password(new_password)
+    if not is_valid:
+        return False, message
+
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+
+        # Obtener token de la base de datos
+        cursor.execute('''
+        SELECT user_id, token_hash, expires_at, used
+        FROM password_reset_tokens
+        WHERE token_hash = ?
+        ''', (hashlib.sha256(token.encode('utf-8')).hexdigest(),))
+        token_data = cursor.fetchone()
+
+        if not token_data:
+            return False, "Invalid or expired token"
+
+        user_id, stored_token_hash, expires_at, used = token_data
+
+        if used:
+            return False, "Token has already been used"
+
+        if datetime.datetime.now() > expires_at:
+            return False, "Token has expired"
+
+        # Generar nuevo hash de contraseña
+        new_hash, new_salt, new_iterations = hash_password(new_password)
+
+        # Actualizar contraseña y marcar token como usado
+        cursor.execute('''
+        UPDATE users SET password_hash = ?, salt = ?, iterations = ?
+        WHERE id = ?
+        ''', (new_hash, new_salt, new_iterations, user_id))
+
+        cursor.execute('''
+        UPDATE password_reset_tokens SET used = TRUE
+        WHERE token_hash = ?
+        ''', (stored_token_hash,))
+
+        conn.commit()
+
+        return True, "Password reset successfully"
+
+# Endpoints de la API
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    success, message = register_user(username, password)
+    if success:
+        return jsonify({'message': message}), 201
+    else:
+        return jsonify({'error': message}), 400
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    success, message = login_user(username, password)
+    if success:
+        return jsonify({'message': message}), 200
+    else:
+        return jsonify({'error': message}), 401
+
+@app.route('/change_password', methods=['POST'])
+@login_required
+def change_pwd():
+    data = request.get_json()
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+
+    success, message = change_password(current_password, new_password)
+    if success:
+        return jsonify({'message': message}), 200
+    else:
+        return jsonify({'error': message}), 400
+
+@app.route('/request_reset', methods=['POST'])
+def request_reset():
+    data = request.get_json()
+    username = data.get('username')
+
+    success, token = generate_password_reset_token(username)
+    if success:
+        return jsonify({'message': 'Reset token generated', 'token': token}), 200
+    else:
+        return jsonify({'error': token}), 400
+
+@app.route('/reset_password', methods=['POST'])
+def reset_pwd():
+    data = request.get_json()
+    token = data.get('token')
+    new_password = data.get('new_password')
+
+    success, message = reset_password(token, new_password)
+    if success:
+        return jsonify({'message': message}), 200
+    else:
+        return jsonify

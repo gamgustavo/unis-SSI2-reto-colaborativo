@@ -1,0 +1,42 @@
+from flask import Flask, request, jsonify
+import requests
+from urllib.parse import urlparse
+import re
+
+app = Flask(__name__)
+
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except ValueError:
+        return False
+
+def fetch_url_content(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.text
+    except requests.RequestException as e:
+        return str(e)
+
+@app.route('/fetch-url', methods=['POST'])
+def fetch_url():
+    data = request.json
+    url = data.get('url', '')
+
+    if not is_valid_url(url):
+        return jsonify({"error": "Invalid URL"}), 400
+    
+    # Basic validation to prevent SSRF attacks
+    if re.match(r'^https?://(?:[a-z0-9.-]+\.[a-z]{2,}|localhost|127\.0\.0\.1)$', urlparse(url).netloc) is None:
+        return jsonify({"error": "URL not allowed"}), 400
+    
+    content = fetch_url_content(url)
+    return jsonify({"content": content})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

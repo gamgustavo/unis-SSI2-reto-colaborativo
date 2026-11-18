@@ -1,0 +1,39 @@
+import hashlib
+import logging
+from datetime import datetime
+
+# Configuración del logger
+logging.basicConfig(filename='login_attempts.log', level=logging.INFO, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+
+def hash_password(password):
+    """Hashea una contraseña usando SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_credentials(username, password):
+    """Verifica las credenciales contra un diccionario de usuarios (simulado)."""
+    users = {
+        'user1': hash_password('password1'),
+        'user2': hash_password('password2')
+    }
+    hashed_password = hash_password(password)
+    return users.get(username) == hashed_password
+
+def login(username, password):
+    """Función de inicio de sesión que registra intentos."""
+    try:
+        logging.info(f"Intento de inicio de sesión: usuario={username}, contraseña=[Filtrada]")
+        if check_credentials(username, password):
+            logging.info(f"Inicio de sesión exitoso para el usuario: {username}")
+            return True
+        else:
+            logging.warning(f"Credenciales incorrectas para el usuario: {username}")
+            return False
+    except Exception as e:
+        logging.error(f"Error durante el intento de inicio de sesión: {e}")
+        return False
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    login('user1', 'password1')
+    login('user2', 'password3')  # Intento fallido

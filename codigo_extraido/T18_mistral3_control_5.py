@@ -1,0 +1,31 @@
+from flask import Flask, redirect, request, url_for, session
+from werkzeug.security import check_password_hash
+
+app = Flask(__name__)
+app.secret_key = 'tu_clave_secreta_aqui'
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        next_url = request.args.get('next') or request.form.get('next') or url_for('index')
+
+        # Aquí deberías validar el usuario y contraseña contra tu base de datos
+        # Este es solo un ejemplo básico
+        if username == 'admin' and check_password_hash('hashed_password', password):
+            session['user'] = username
+            return redirect(next_url if next_url.startswith('/') else url_for('index'))
+
+        return 'Credenciales inválidas', 401
+
+    # Para GET, mostrar el formulario de login
+    next_url = request.args.get('next')
+    return f'''
+        <form method="post">
+            <input type="text" name="username" placeholder="Usuario" required>
+            <input type="password" name="password" placeholder="Contraseña" required>
+            <input type="hidden" name="next" value="{next_url or ''}">
+            <button type="submit">Iniciar sesión</button>
+        </form>
+    '''

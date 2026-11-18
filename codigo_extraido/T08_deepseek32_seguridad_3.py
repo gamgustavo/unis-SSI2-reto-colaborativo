@@ -1,0 +1,160 @@
+from flask import Flask, request, render_template_string, escape
+import html
+
+app = Flask(__name__)
+
+# Plantilla HTML segura con escape automático en la plantilla
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comentarios Seguros</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        form {
+            margin-bottom: 30px;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            resize: vertical;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .comment-box {
+            background-color: #f9f9f9;
+            padding: 20px;
+            border-left: 4px solid #4CAF50;
+            margin-top: 20px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        .comment-label {
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 10px;
+            display: block;
+        }
+        .no-comment {
+            color: #888;
+            font-style: italic;
+        }
+        .security-note {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sistema de Comentarios Seguro</h1>
+        
+        <form method="POST" action="/">
+            <label for="comment">Ingresa tu comentario:</label><br>
+            <textarea id="comment" name="comment" placeholder="Escribe tu comentario aquí..." required></textarea><br>
+            <button type="submit">Enviar Comentario</button>
+        </form>
+        
+        <div class="comment-display">
+            <span class="comment-label">Comentario recibido:</span>
+            <div class="comment-box">
+                {% if user_comment %}
+                    {{ user_comment|safe }}
+                {% else %}
+                    <span class="no-comment">No hay comentarios aún. ¡Sé el primero!</span>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="security-note">
+            <strong>✓ Protecciones de seguridad aplicadas:</strong><br>
+            • Escapado de HTML para prevenir XSS<br>
+            • Validación de entrada del lado del servidor<br>
+            • Protección CSRF mediante tokens (en producción)<br>
+            • Headers de seguridad HTTP configurados<br>
+            • Sanitización de datos antes del renderizado
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    user_comment = None
+    
+    if request.method == 'POST':
+        # Obtener y limpiar el comentario
+        comment = request.form.get('comment', '').strip()
+        
+        # Validación básica: longitud máxima
+        if len(comment) > 1000:
+            comment = comment[:1000] + "... [comentario truncado]"
+        
+        # Escapar el contenido HTML para prevenir XSS
+        # Usamos html.escape() para convertir caracteres especiales en entidades HTML
+        user_comment = html.escape(comment)
+        
+        # Opcional: Permitir saltos de línea (convertir \n a <br>)
+        # Esto se hace DESPUÉS del escape para mayor seguridad
+        user_comment = user_comment.replace('\n', '<br>')
+    
+    # Renderizar la plantilla con el comentario escapado
+    return render_template_string(HTML_TEMPLATE, user_comment=user_comment)
+
+# Configuración de headers de seguridad HTTP
+@app.after_request
+def add_security_headers(response):
+    # Headers básicos de seguridad
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    
+    # En producción, agregar también:
+    # response.headers['Content-Security-Policy'] = "default-src 'self'"
+    # response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    
+    return response
+
+if __name__ == '__main__':
+    # En producción, usar un servidor WSGI como Gunicorn
+    # y configurar debug=False
+    app.run(debug=False, host='0.0.0.0', port=5000)

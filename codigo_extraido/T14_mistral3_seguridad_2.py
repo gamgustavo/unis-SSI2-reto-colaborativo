@@ -1,0 +1,180 @@
+import os
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from typing import Optional, Dict, Any
+import json
+import logging
+from urllib.parse import urljoin
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class SecureAPIClient:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: int = 10,
+        max_retries: int = 3,
+        verify_ssl: bool = True,
+        ca_bundle_path: Optional[str] = None
+    ):
+        """
+        Cliente seguro para consumir APIs HTTPS.
+
+        Args:
+            base_url: URL base de la API (ej: 'https://api.ejemplo.com/v1/')
+            token: Token de autenticación (se recomienda no hardcodearlo)
+            timeout: Tiempo máximo de espera para la respuesta (segundos)
+            max_retries: Número máximo de reintentos en caso de fallos
+            verify_ssl: Verificar certificado SSL (desactivar solo en entornos de desarrollo)
+            ca_bundle_path: Ruta a un bundle de certificados personalizado
+        """
+        if not base_url.startswith('https://'):
+            raise ValueError("Solo se permiten URLs HTTPS")
+
+        self.base_url = base_url.rstrip('/') + '/'
+        self.token = token
+        self.timeout = timeout
+        self.verify_ssl = verify_ssl
+        self.ca_bundle_path = ca_bundle_path
+
+        # Configurar sesión con reintentos
+        self.session = self._create_session(max_retries)
+
+        # Validar token (básico)
+        if not self.token or len(self.token) < 16:
+            logger.warning("El token proporcionado parece demasiado corto")
+
+    def _create_session(self, max_retries: int) -> requests.Session:
+        """Configura una sesión con políticas de reintento seguras."""
+        session = requests.Session()
+
+        # Configurar reintentos para errores temporales
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=1,
+            status_forcelist=[408, 429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)  # Aunque no lo usaremos, por si acaso
+
+        return session
+
+    def _get_headers(self) -> Dict[str, str]:
+        """Genera headers seguros para las peticiones."""
+        return {
+            'Authorization': f'Bearer {self.token}',
+            'User-Agent': 'SecureAPIClient/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        }
+
+    def _validate_response(self, response: requests.Response) -> Dict[str, Any]:
+        """Valida y procesa la respuesta de la API."""
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Error HTTP: {e}")
+            if response.status_code == 401:
+                raise ValueError("Token no válido o expirado") from e
+            elif response.status_code == 403:
+                raise PermissionError("No tiene permisos para esta operación") from e
+            raise
+
+        try:
+            return response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Respuesta no es JSON válido: {response.text}")
+            raise ValueError("La respuesta no es un JSON válido") from e
+
+    def get(self, endpoint: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Realiza una petición GET segura a la API.
+
+        Args:
+            endpoint: Ruta del endpoint (ej: 'users')
+            params: Parámetros de consulta
+
+        Returns:
+            Diccionario con la respuesta JSON
+        """
+        url = urljoin(self.base_url, endpoint)
+
+        try:
+            response = self.session.get(
+                url,
+                headers=self._get_headers(),
+                params=params,
+                timeout=self.timeout,
+                verify=self.ca_bundle_path if self.ca_bundle_path else self.verify_ssl
+            )
+            return self._validate_response(response)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error en la petición GET: {e}")
+            raise
+
+    def post(self, endpoint: str, data: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Realiza una petición POST segura a la API.
+
+        Args:
+            endpoint: Ruta del endpoint
+            data: Datos a enviar en el cuerpo de la petición
+
+        Returns:
+            Diccionario con la respuesta JSON
+        """
+        url = urljoin(self.base_url, endpoint)
+
+        try:
+            response = self.session.post(
+                url,
+                headers=self._get_headers(),
+                json=data,
+                timeout=self.timeout,
+                verify=self.ca_bundle_path if self.ca_bundle_path else self.verify_ssl
+            )
+            return self._validate_response(response)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error en la petición POST: {e}")
+            raise
+
+    def close(self):
+        """Cierra la sesión de manera segura."""
+        self.session.close()
+
+# Ejemplo de uso seguro
+if __name__ == "__main__":
+    # El token debería venir de una variable de entorno o sistema seguro
+    API_TOKEN = os.getenv('API_TOKEN')
+    if not API_TOKEN:
+        raise ValueError("El token de API no está configurado en las variables de entorno")
+
+    try:
+        client = SecureAPIClient(
+            base_url="https://api.ejemplo.com/v1/",
+            token=API_TOKEN,
+            timeout=15,
+            max_retries=3
+        )
+
+        # Ejemplo de petición GET
+        response = client.get("users", params={"limit": 10})
+        print("Respuesta GET:", json.dumps(response, indent=2))
+
+        # Ejemplo de petición POST
+        # response = client.post("users", data={"name": "Nuevo Usuario"})
+        # print("Respuesta POST:", json.dumps(response, indent=2))
+
+    except Exception as e:
+        logger.error(f"Error en el cliente API: {e}")
+    finally:
+        client.close()

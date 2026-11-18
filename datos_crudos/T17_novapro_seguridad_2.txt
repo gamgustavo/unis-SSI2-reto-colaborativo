@@ -1,0 +1,36 @@
+```python
+import re
+
+def is_safe_expression(expression):
+    # Verifica que la expresión solo contenga caracteres válidos
+    valid_chars = set("0123456789+-*/(). ")
+    return all(c in valid_chars for c in expression)
+
+def evaluate_expression(expression):
+    try:
+        # Utiliza una expresión regular para asegurar que la expresión sea segura
+        if not is_safe_expression(expression):
+            raise ValueError("Expresión no segura")
+        
+        # Evalúa la expresión de forma segura
+        result = eval(expression)
+        return result
+    except Exception as e:
+        return str(e)
+
+def main():
+    print("Calculadora de Consola")
+    print("Ingrese 'salir' para terminar")
+    
+    while True:
+        expression = input("Ingrese una expresión matemática: ")
+        
+        if expression.lower() == 'salir':
+            break
+        
+        result = evaluate_expression(expression)
+        print(f"Resultado: {result}")
+
+if __name__ == "__main__":
+    main()
+```

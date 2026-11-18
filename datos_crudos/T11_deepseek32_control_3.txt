@@ -1,0 +1,54 @@
+```python
+import xml.etree.ElementTree as ET
+from typing import List, Optional
+
+def extract_items_from_xml(xml_content: str) -> List[str]:
+    """
+    Extrae los valores de todos los elementos 'item' en un documento XML.
+    
+    Args:
+        xml_content: Cadena con el contenido XML a procesar.
+    
+    Returns:
+        Lista con los valores de texto de todos los elementos 'item' encontrados.
+        Lista vacía si no se encuentran elementos 'item' o hay error en el XML.
+    """
+    try:
+        # Parsear el contenido XML
+        root = ET.fromstring(xml_content)
+        
+        # Buscar todos los elementos 'item' en cualquier nivel del árbol
+        items = root.findall('.//item')
+        
+        # Extraer el texto de cada elemento 'item'
+        # Si un elemento no tiene texto, se incluye None
+        item_values = [item.text for item in items]
+        
+        # Filtrar elementos sin texto (None) y convertir a cadena vacía si se desea
+        # return [value for value in item_values if value is not None]
+        
+        # Alternativa: mantener None para indicar elementos vacíos
+        return item_values
+        
+    except ET.ParseError as e:
+        print(f"Error al parsear XML: {e}")
+        return []
+    except Exception as e:
+        print(f"Error inesperado: {e}")
+        return []
+
+# Ejemplo de uso (comentado):
+# xml_data = '''
+# <root>
+#     <item>Primer elemento</item>
+#     <section>
+#         <item>Segundo elemento</item>
+#         <other>Otro</other>
+#     </section>
+#     <item>Tercer elemento</item>
+# </root>
+# '''
+# 
+# result = extract_items_from_xml(xml_data)
+# print(result)  # ['Primer elemento', 'Segundo elemento', 'Tercer elemento']
+```

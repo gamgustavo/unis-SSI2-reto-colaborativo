@@ -1,0 +1,62 @@
+import os
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Optional
+
+def guardar_reporte_temporal(datos: bytes, sufijo: Optional[str] = None) -> str:
+    """
+    Guarda datos de un reporte en un archivo temporal seguro y devuelve la ruta.
+
+    Args:
+        datos: Contenido del reporte en bytes.
+        sufijo: Sufijo opcional para el nombre del archivo (ej: '.pdf', '.csv').
+
+    Returns:
+        Ruta absoluta del archivo temporal creado.
+
+    Raises:
+        ValueError: Si los datos están vacíos o no son bytes.
+        IOError: Si ocurre un error al escribir el archivo.
+    """
+    if not isinstance(datos, bytes):
+        raise ValueError("Los datos deben ser de tipo bytes")
+    if not datos:
+        raise ValueError("Los datos no pueden estar vacíos")
+
+    # Validar sufijo para evitar inyección de path
+    if sufijo is not None:
+        if not isinstance(sufijo, str) or not sufijo.startswith('.'):
+            raise ValueError("El sufijo debe ser una cadena que comience con '.'")
+        sufijo = ''.join(c for c in sufijo if c.isalnum() or c in ('.', '_', '-'))
+
+    # Crear directorio temporal seguro con permisos restringidos
+    temp_dir = tempfile.mkdtemp(prefix='report_', dir=tempfile.gettempdir())
+    try:
+        os.chmod(temp_dir, 0o700)  # Solo el propietario puede leer/escribir/ejecutar
+
+        # Generar nombre de archivo aleatorio para evitar colisiones
+        nombre_archivo = f"report_{uuid.uuid4().hex}"
+        if sufijo:
+            nombre_archivo += sufijo
+
+        ruta_archivo = os.path.join(temp_dir, nombre_archivo)
+        ruta_archivo = os.path.abspath(ruta_archivo)
+
+        # Verificar que la ruta esté dentro del directorio temporal
+        if not Path(ruta_archivo).resolve().parent.samefile(Path(temp_dir).resolve()):
+            raise IOError("Intento de escritura fuera del directorio temporal")
+
+        # Escribir datos con permisos restringidos
+        with open(ruta_archivo, 'wb') as f:
+            os.chmod(ruta_archivo, 0o600)  # Solo el propietario puede leer/escribir
+            f.write(datos)
+
+        return ruta_archivo
+    except Exception as e:
+        # Limpiar directorio temporal si ocurre un error
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
+        raise IOError(f"Error al crear archivo temporal: {str(e)}")

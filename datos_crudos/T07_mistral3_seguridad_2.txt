@@ -1,0 +1,171 @@
+```python
+import json
+import base64
+import hmac
+import hashlib
+from typing import Dict, Any, Optional
+from itsdangerous import URLSafeSerializer, BadSignature, SignatureExpired
+import secrets
+
+class SecureSessionSerializer:
+    """
+    A secure session serializer that handles encoding, decoding, signing, and verification
+    of session data to prevent tampering and ensure data integrity.
+    """
+
+    def __init__(self, secret_key: str, salt: str = 'session', max_age: Optional[int] = None):
+        """
+        Initialize the serializer with a secret key and optional salt and max age.
+
+        Args:
+            secret_key: A strong secret key for signing and verification
+            salt: A unique salt for the session serializer
+            max_age: Maximum age of the session in seconds (optional)
+        """
+        if not secret_key or len(secret_key) < 32:
+            raise ValueError("Secret key must be at least 32 characters long")
+
+        self.secret_key = secret_key
+        self.salt = salt
+        self.max_age = max_age
+
+        # Use itsdangerous for secure serialization with signing
+        self.serializer = URLSafeSerializer(
+            secret_key=self.secret_key,
+            salt=self.salt,
+            serializer=json,
+            signer_kwargs={
+                'key_derivation': 'hmac',
+                'digest_method': hashlib.sha256
+            }
+        )
+
+    def generate_session_id(self) -> str:
+        """Generate a cryptographically secure random session ID."""
+        return secrets.token_hex(16)
+
+    def serialize_session(self, session_data: Dict[str, Any]) -> str:
+        """
+        Serialize and sign session data for secure transmission.
+
+        Args:
+            session_data: Dictionary containing session data
+
+        Returns:
+            Base64 encoded string of signed session data
+        """
+        if not isinstance(session_data, dict):
+            raise TypeError("Session data must be a dictionary")
+
+        # Validate session data size to prevent DoS attacks
+        serialized = json.dumps(session_data)
+        if len(serialized) > 4096:  # 4KB limit
+            raise ValueError("Session data too large")
+
+        # Sign and serialize the data
+        signed_data = self.serializer.dumps(session_data)
+
+        # Encode as base64 for safe cookie transmission
+        return base64.b64encode(signed_data.encode('utf-8')).decode('utf-8')
+
+    def deserialize_session(self, session_cookie: bytes) -> Dict[str, Any]:
+        """
+        Deserialize and verify session data from a cookie value.
+
+        Args:
+            session_cookie: Bytes containing the session cookie value
+
+        Returns:
+            Dictionary containing the deserialized session data
+
+        Raises:
+            ValueError: If the session data is invalid or tampered with
+            TypeError: If the input is not valid
+        """
+        if not session_cookie:
+            raise ValueError("Session cookie cannot be empty")
+
+        if not isinstance(session_cookie, bytes):
+            raise TypeError("Session cookie must be bytes")
+
+        try:
+            # Decode from base64
+            decoded_cookie = base64.b64decode(session_cookie).decode('utf-8')
+
+            # Verify and deserialize the signed data
+            if self.max_age:
+                session_data = self.serializer.loads(decoded_cookie, max_age=self.max_age)
+            else:
+                session_data = self.serializer.loads(decoded_cookie)
+
+            # Validate the deserialized data
+            if not isinstance(session_data, dict):
+                raise ValueError("Invalid session data format")
+
+            # Additional security checks
+            if len(session_data) > 50:  # Prevent excessive number of session keys
+                raise ValueError("Too many session keys")
+
+            # Check for potentially dangerous keys
+            dangerous_keys = ['__', 'python', 'os', 'sys', 'exec', 'eval']
+            for key in session_data.keys():
+                if any(dangerous in key.lower() for dangerous in dangerous_keys):
+                    raise ValueError(f"Invalid session key: {key}")
+
+            return session_data
+
+        except (BadSignature, SignatureExpired) as e:
+            # Log the error in a real application
+            raise ValueError("Invalid or expired session signature") from e
+        except (json.JSONDecodeError, UnicodeDecodeError, base64.binascii.Error) as e:
+            raise ValueError("Invalid session data format") from e
+        except Exception as e:
+            raise ValueError(f"Failed to deserialize session: {str(e)}") from e
+
+def reconstruct_session(session_cookie_value: bytes, secret_key: str) -> Dict[str, Any]:
+    """
+    Reconstruct a user session from a session cookie value.
+
+    Args:
+        session_cookie_value: The value of the session cookie in bytes
+        secret_key: A strong secret key for session verification
+
+    Returns:
+        Dictionary containing the reconstructed session data
+
+    Raises:
+        ValueError: If the session data is invalid, tampered with, or expired
+    """
+    # Initialize the secure serializer
+    serializer = SecureSessionSerializer(secret_key=secret_key)
+
+    # Deserialize and verify the session
+    session_data = serializer.deserialize_session(session_cookie_value)
+
+    return session_data
+
+# Example usage:
+if __name__ == "__main__":
+    # In a real application, store this securely (e.g., environment variables)
+    SECRET_KEY = secrets.token_hex(32)  # 64-character hex string
+
+    # Example session data
+    example_session = {
+        'user_id': 123,
+        'username': 'secure_user',
+        'authenticated': True,
+        'last_activity': '2023-11-15T12:00:00Z'
+    }
+
+    # Serialize the session
+    serializer = SecureSessionSerializer(secret_key=SECRET_KEY)
+    serialized = serializer.serialize_session(example_session)
+    serialized_bytes = base64.b64decode(serialized.encode('utf-8'))
+
+    # Reconstruct the session
+    try:
+        reconstructed = reconstruct_session(serialized_bytes, SECRET_KEY)
+        print("Successfully reconstructed session:", reconstructed)
+    except ValueError as e:
+        print("Failed to reconstruct session:", str(e))
+```

@@ -1,0 +1,91 @@
+import os
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import DictCursor
+import sys
+
+def get_db_connection():
+    """Establece conexión segura a la base de datos usando variables de entorno"""
+    try:
+        # Obtener credenciales de variables de entorno (no hardcodear)
+        db_host = os.environ.get('DB_HOST', 'localhost')
+        db_port = os.environ.get('DB_PORT', '5432')
+        db_name = os.environ.get('DB_NAME')
+        db_user = os.environ.get('DB_USER')
+        db_password = os.environ.get('DB_PASSWORD')
+        
+        # Validar que existan las credenciales mínimas
+        if not all([db_name, db_user]):
+            raise ValueError("Faltan variables de entorno necesarias: DB_NAME y DB_USER")
+        
+        # Configurar SSL si está disponible
+        ssl_mode = os.environ.get('DB_SSL_MODE', 'prefer')
+        
+        conn = psycopg2.connect(
+            host=db_host,
+            port=db_port,
+            dbname=db_name,
+            user=db_user,
+            password=db_password,
+            sslmode=ssl_mode,
+            connect_timeout=10
+        )
+        
+        return conn
+    except Exception as e:
+        print(f"Error de conexión: {e}", file=sys.stderr)
+        return None
+
+def list_clientes():
+    """Lista las filas de la tabla clientes de forma segura"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return
+        
+        # Usar cursor con DictCursor para mayor claridad
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            # Usar sql.SQL para construir la consulta de forma segura
+            # El nombre de la tabla se escapa adecuadamente
+            query = sql.SQL("SELECT * FROM {}").format(
+                sql.Identifier('clientes')
+            )
+            
+            cursor.execute(query)
+            
+            # Obtener resultados
+            rows = cursor.fetchall()
+            
+            if not rows:
+                print("No hay registros en la tabla clientes")
+                return
+            
+            # Mostrar resultados
+            print(f"Total de registros: {len(rows)}")
+            print("-" * 80)
+            
+            for row in rows:
+                # Convertir a dict para mostrar de forma legible
+                row_dict = dict(row)
+                for key, value in row_dict.items():
+                    print(f"{key}: {value}")
+                print("-" * 80)
+                
+    except psycopg2.Error as e:
+        print(f"Error de base de datos: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"Error inesperado: {e}", file=sys.stderr)
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    # Verificar que psycopg2 esté instalado
+    try:
+        import psycopg2
+    except ImportError:
+        print("Error: psycopg2 no está instalado. Instálalo con: pip install psycopg2-binary", file=sys.stderr)
+        sys.exit(1)
+    
+    list_clientes()

@@ -1,0 +1,52 @@
+```python
+from flask import Flask, request, render_template_string
+from flask_wtf import FlaskForm
+from wtforms import StringField
+from wtforms.validators import DataRequired
+import bleach
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your_secret_key_here'  # Cambia esto por una clave secreta segura
+
+class CommentForm(FlaskForm):
+    comment = StringField('comment', validators=[DataRequired()])
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    form = CommentForm()
+    comment = None
+
+    if form.validate_on_submit():
+        comment = bleach.clean(form.comment.data, tags=[], attributes={}, strip=True)  # Sanitiza el comentario
+
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Comentario</title>
+    </head>
+    <body>
+        <h1>Deja tu comentario:</h1>
+        <form method="post">
+            {{ form.hidden_tag() }}
+            <p>{{ form.comment.label }}<br>{{ form.comment() }}</p>
+            <p><input type="submit" value="Enviar"></p>
+        </form>
+        {% if comment %}
+            <h2>Tu comentario:</h2>
+            <p>{{ comment }}</p>
+        {% endif %}
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, form=form, comment=comment)
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+En este código:
+1. Se utiliza `Flask-WTF` para manejar la validación y protección CSRF de los formularios.
+2. Se utiliza `bleach` para sanitizar la entrada del usuario y prevenir ataques de inyección de HTML/JS.
+3. Se utiliza `render_template_string` para renderizar directamente una plantilla HTML desde una cadena, aunque en un entorno de producción se recomienda usar archivos HTML separados para una mejor organización y seguridad.

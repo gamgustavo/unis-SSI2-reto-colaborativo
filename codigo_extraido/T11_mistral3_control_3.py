@@ -1,0 +1,9 @@
+import xml.etree.ElementTree as ET
+
+def extraer_items_xml(xml_string):
+    try:
+        root = ET.fromstring(xml_string)
+        items = [item.text for item in root.findall('.//item') if item.text is not None]
+        return items
+    except ET.ParseError as e:
+        return f"Error al parsear el XML: {e}"

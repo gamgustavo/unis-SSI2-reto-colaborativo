@@ -1,0 +1,66 @@
+import os
+from flask import Flask, request, jsonify, abort
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# Configuración segura
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limita el tamaño de los archivos a 16MB
+app.config['UPLOAD_FOLDER'] = 'documentos'
+app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'md'}  # Extensiones permitidas
+
+# Verifica que la carpeta de documentos exista
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def allowed_file(filename):
+    """Verifica que el archivo tenga una extensión permitida."""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+@app.route('/documento', methods=['GET'])
+def get_documento():
+    """Endpoint para obtener el contenido de un archivo de la carpeta 'documentos'."""
+    filename = request.args.get('filename')
+
+    # Validaciones de seguridad
+    if not filename:
+        abort(400, description="El parámetro 'filename' es obligatorio.")
+
+    if not allowed_file(filename):
+        abort(400, description="Extensión de archivo no permitida.")
+
+    # Sanitiza el nombre del archivo para evitar path traversal
+    secure_name = secure_filename(filename)
+    if not secure_name or secure_name != filename:
+        abort(400, description="Nombre de archivo no válido.")
+
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_name)
+
+    # Verifica que el archivo exista y esté dentro de la carpeta permitida
+    if not os.path.isfile(file_path) or not os.path.abspath(file_path).startswith(os.path.abspath(app.config['UPLOAD_FOLDER'])):
+        abort(404, description="Archivo no encontrado.")
+
+    try:
+        # Lee el archivo en modo binario para manejar cualquier tipo de archivo
+        with open(file_path, 'rb') as file:
+            content = file.read()
+
+        # Devuelve el contenido con el tipo MIME adecuado
+        mime_type = 'application/octet-stream'
+        if filename.endswith('.txt'):
+            mime_type = 'text/plain'
+        elif filename.endswith('.pdf'):
+            mime_type = 'application/pdf'
+        elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+            mime_type = f'image/{filename.rsplit(".", 1)[1].lower()}'
+        elif filename.endswith('.md'):
+            mime_type = 'text/markdown'
+
+        return content, 200, {'Content-Type': mime_type}
+
+    except Exception as e:
+        app.logger.error(f"Error al leer el archivo {filename}: {str(e)}")
+        abort(500, description="Error interno del servidor.")
+
+if __name__ == '__main__':
+    app.run(debug=False)  # Nunca usar debug=True en producción

@@ -1,0 +1,23 @@
+```python
+import yaml
+
+def leer_archivo_yaml(archivo):
+    try:
+        with open(archivo, 'r') as file:
+            configuracion = yaml.safe_load(file)
+            return configuracion
+    except FileNotFoundError:
+        print("El archivo no fue encontrado.")
+        return None
+    except yaml.YAMLError as exc:
+        print("Error al parsear el archivo YAML:", exc)
+        return None
+```
+
+Para usar esta función, asegúrate de que el archivo YAML esté en la misma ubicación que tu script o proporciona la ruta completa al archivo. Por ejemplo:
+
+```python
+configuracion = leer_archivo_yaml('config.yaml')
+if configuracion:
+    print(configuracion)
+```

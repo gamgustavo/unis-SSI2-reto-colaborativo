@@ -1,0 +1,33 @@
+```python
+import os
+import tempfile
+import uuid
+
+def save_report_to_temp_file(report_data):
+    try:
+        # Generar un nombre de archivo único para evitar colisiones
+        unique_filename = f"report_{uuid.uuid4()}.txt"
+        
+        # Crear un archivo temporal con un contexto seguro que se cierra automáticamente
+        with tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix=".txt") as temp_file:
+            temp_file.write(report_data)
+            temp_file_path = temp_file.name
+        
+        # Verificar que el archivo se ha creado y contiene datos
+        if os.path.exists(temp_file_path) and os.path.getsize(temp_file_path) > 0:
+            return temp_file_path
+        else:
+            os.remove(temp_file_path)
+            raise IOError("No se pudo crear el archivo temporal.")
+    
+    except Exception as e:
+        # Manejar cualquier excepción y asegurar que no se deje ningún archivo temporal huérfano
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        raise IOError(f"Error al guardar el reporte: {e}")
+
+# Ejemplo de uso
+# report_data = "Este es el contenido del reporte."
+# file_path = save_report_to_temp_file(report_data)
+# print(f"Reporte guardado en: {file_path}")
+```

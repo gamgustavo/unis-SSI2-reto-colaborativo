@@ -1,0 +1,20 @@
+import yaml
+import os
+
+def read_yaml_config(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            config = yaml.safe_load(file)
+            if not isinstance(config, dict):
+                raise ValueError("El archivo YAML no contiene un diccionario válido.")
+            return config
+    except FileNotFoundError:
+        raise FileNotFoundError(f"El archivo {file_path} no fue encontrado.")
+    except yaml.YAMLError as e:
+        raise ValueError(f"Error al parsear el archivo YAML: {e}")
+    except Exception as e:
+        raise ValueError(f"Ocurrió un error inesperado: {e}")
+
+# Ejemplo de uso
+# config = read_yaml_config('config.yaml')
+# print(config)

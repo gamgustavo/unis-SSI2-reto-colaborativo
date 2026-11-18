@@ -1,0 +1,24 @@
+```python
+import tempfile
+import os
+
+def guardar_reporte_temporal(datos_reporte):
+    try:
+        # Crear un archivo temporal
+        with tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.txt') as temp:
+            temp.write(datos_reporte)
+            temp.flush()  # Asegurarse de que los datos se escriban en el archivo
+            return temp.name
+    except Exception as e:
+        print(f"Ocurrió un error al guardar el reporte: {e}")
+        return None
+
+# Ejemplo de uso
+if __name__ == "__main__":
+    datos_reporte = "Este es el contenido del reporte."
+    ruta_archivo = guardar_reporte_temporal(datos_reporte)
+    if ruta_archivo:
+        print(f"El reporte se guardó en: {ruta_archivo}")
+    else:
+        print("No se pudo guardar el reporte.")
+```

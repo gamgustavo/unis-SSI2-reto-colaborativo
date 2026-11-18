@@ -1,0 +1,15 @@
+import requests
+
+url = "https://api.example.com/data"
+headers = {
+    "Authorization": "Bearer YOUR_TOKEN_HERE",
+    "Content-Type": "application/json"
+}
+
+response = requests.get(url, headers=headers)
+
+if response.status_code == 200:
+    json_response = response.json()
+    print(json_response)
+else:
+    print("Error al consumir la API:", response.status_code)
